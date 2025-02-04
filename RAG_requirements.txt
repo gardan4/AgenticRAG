@@ -1,0 +1,16 @@
+#Unstructured.io libraries for parsing
+
+unstructured
+unstructured-ingest[remote]
+unstructured[pptx]
+unstructured[markdown]
+unstructured[pdf]
+unstructured[docx]
+unstructured[txt]
+
+#Additional libraries needed for parsing
+pytesseract
+#It is also needed to install locally tesseract-ocr and poppler-utils and add them to PATH
+
+#API library
+flask
