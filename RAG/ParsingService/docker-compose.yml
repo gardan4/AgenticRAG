@@ -1,4 +1,3 @@
-#For creating docker container with parsing services
 services:
   flask_app:
     platform: linux/amd64
@@ -12,5 +11,5 @@ services:
       - .:/app
     environment:
       - CUDA_VISIBLE_DEVICES=""
-      - FLASK_APP=preprocessing_api.py
+      - FLASK_APP=parsingAPI.py
       - FLASK_ENV=development

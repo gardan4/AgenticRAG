@@ -1,16 +1,13 @@
-#Unstructured.io libraries for parsing
+#Install microsoft C++ build tools on your system (https://visualstudio.microsoft.com/visual-cpp-build-tools/) Make sure Desktop development with C++ is checked in the installer.
 
 unstructured
-unstructured-ingest[remote]
-unstructured[pptx]
-unstructured[markdown]
-unstructured[pdf]
-unstructured[docx]
-unstructured[txt]
-
-#Additional libraries needed for parsing
-pytesseract
-#It is also needed to install locally tesseract-ocr and poppler-utils and add them to PATH
-
-#API library
+#Libraries needed
+PyPDF2
+Pillow
+langchain>=0.2.9
+langchain-community
+langchain-core
+langchain-openai
+chromadb
+python-dotenv
 flask
