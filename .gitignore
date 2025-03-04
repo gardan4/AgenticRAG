@@ -172,3 +172,5 @@ cython_debug/
 
 # Contents from RAG folder
 RAG/test.py
+RAG/Database/Input/*
+RAG/Database/Output/*

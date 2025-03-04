@@ -1,4 +1,5 @@
 from unstructured.documents.elements import Element, ElementMetadata, CoordinateSystem
+from CustomElementMetadata import CustomElementMetadata
 from chromadb_functions import create_database,load_database_from_dir,add_documents_to_database
 from dotenv import load_dotenv
 import requests
@@ -47,7 +48,7 @@ def get_all_files(folder_path):
     
     return file_list
 
-def jsonToElements(json_data):
+def jsonToElements(json_data,filename="Unknown",trust_score=50):
     # Check if json_data is a Response object and handle it
     if hasattr(json_data, 'json'):  # Check if it's a Response object
         json_data = json_data.json()  # Use the .json() method to directly parse it
@@ -64,8 +65,9 @@ def jsonToElements(json_data):
 
         coordinate_system = CoordinateSystem(width=0, height=0)
 
-        metadata = ElementMetadata(
-            filename="Unknown",
+        metadata = CustomElementMetadata(
+            filename=filename,
+            trust_score=trust_score,
             page_number=0,
             coordinates=coordinate_system,
             languages=['en']
@@ -89,15 +91,19 @@ def jsonToElements(json_data):
 
 load_dotenv()
 
+#Change this field before running the file, depending on the trustworthiness of the documents located in the Input folder
+#Trust score must always be between 0 and 100
+batch_trust_score = 100
+
 #Directory containing all input files
-files_dir = "Input"
+files_dir = "./RAG/Database/Input"
 
 #Folder where the database should be created
-db_folder = "Output"
+db_folder = "./RAG/Database/Output"
 
 #The api url
-url = "http://127.0.0.1:5000/process-pdf-fast"
-#url = "http://127.0.0.1:5000/process-pdf-yolox"
+#url = "http://127.0.0.1:5000/process-pdf-fast"
+url = "http://127.0.0.1:5000/process-pdf-yolox"
 #url = "http://127.0.0.1:5000/process-docx"
 #url = "http://127.0.0.1:5000/process-html"
 
@@ -119,7 +125,7 @@ if(not db_exists):
             # Print the response from the server
             if response.status_code == 200:
                 print("File uploaded successfully!")
-                initial_elements = jsonToElements(json_data=response)
+                initial_elements = jsonToElements(json_data=response,filename=os.path.basename(input_files_list[0]),trust_score=batch_trust_score)
                 db_exists = create_database(initial_elements,db_folder)
                 skip_first_file=input_files_list[0]
             else:
@@ -146,7 +152,7 @@ if db_exists:
                     # Print the response from the server
                     if response.status_code == 200:
                         print("File uploaded successfully!")
-                        new_pdf_elements = jsonToElements(json_data=response)
+                        new_pdf_elements = jsonToElements(json_data=response,filename=os.path.basename(file_path),trust_score=batch_trust_score)
                         add_documents_to_database(new_pdf_elements,db)
                     else:
                         print(f"Error: {response.status_code}")

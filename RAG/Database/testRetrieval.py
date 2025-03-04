@@ -34,7 +34,7 @@ def query_database(query_text, db_folder, k=5):
     return extracted_texts
 
 if __name__ == "__main__":
-    db_folder = "Output"
+    db_folder = "./RAG/Database/Output"
     query_text = input("Enter your question: ")
     k = int(input("Enter the number of results to retrieve: "))
 
