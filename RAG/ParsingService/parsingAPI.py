@@ -2,6 +2,7 @@ from PDF.advanced_pdf import pdf_to_elements_advanced
 from PDF.fast_pdf import pdf_to_elements_fast
 from DOCX.extractDOCX import docx_to_elements
 from HTML.extractHTML import html_to_elements
+from TXT.extractTXT import txt_to_elements
 from flask import Flask, request, jsonify
 import json
 import uuid
@@ -106,7 +107,7 @@ def extract_docx():
     return extracted_json, 200
 
 @app.route("/process-html", methods=["POST"])
-def extract_html():
+def extract_txt():
     # Check if a file is in the request
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -127,6 +128,33 @@ def extract_html():
         os.remove(html_path)
     except Exception as e:
         os.remove(html_path)
+        return jsonify({"error": str(e)}), 500
+
+    # Return the extracted text as json
+    return extracted_json, 200
+
+@app.route("/process-txt", methods=["POST"])
+def extract_html():
+    # Check if a file is in the request
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+
+    txt_file = request.files['file']
+
+    # Check if the user has uploaded a file
+    if txt_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # Save the file to a temporary directory
+    unique_filename = f"{uuid.uuid4()}_{txt_file.filename}"
+    txt_path = os.path.join(tempFolder, unique_filename)
+    txt_file.save(txt_path)
+
+    try:
+        extracted_json = elements_to_json(txt_to_elements(txt_path))
+        os.remove(txt_path)
+    except Exception as e:
+        os.remove(txt_path)
         return jsonify({"error": str(e)}), 500
 
     # Return the extracted text as json

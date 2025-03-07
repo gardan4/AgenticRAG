@@ -1,10 +1,10 @@
 import requests
 
 # For local tests
-url = "http://127.0.0.1:5000/process-pdf"
+url = "http://127.0.0.1:5000/process-txt"
 
 # Path to the PDF file
-file_path = "C:/Users/Stefan/Workspace/RAG Assistant/Input/test.pdf"
+file_path = "C:/Users/Stefan/Workspace/Thesis/AgenticRAG/RAG/DataScrape/Abstracts/Deep Drug Recommender_Ref_1.txt"
 
 
 with open(file_path, 'rb') as file:
