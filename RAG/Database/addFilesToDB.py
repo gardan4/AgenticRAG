@@ -106,6 +106,7 @@ db_folder = "./RAG/Database/Output"
 url = "http://127.0.0.1:5000/process-pdf-yolox"
 #url = "http://127.0.0.1:5000/process-docx"
 #url = "http://127.0.0.1:5000/process-html"
+#url = "http://127.0.0.1:5000/process-txt"
 
 input_files_list = get_all_files(files_dir)
 skip_file = ""

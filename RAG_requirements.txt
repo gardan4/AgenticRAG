@@ -11,3 +11,4 @@ langchain-openai
 chromadb
 python-dotenv
 flask
+pydantic-ai
