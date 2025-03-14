@@ -177,3 +177,4 @@ RAG/Database/Output/*
 RAG/DataScrape/Input*
 RAG/DataScrape/Abstracts*
 testURL.py
+testDB.py

@@ -1,5 +1,6 @@
 from unstructured.documents.elements import Element, ElementMetadata, CoordinateSystem
 from CustomElementMetadata import CustomElementMetadata
+from CustomElement import CustomElement
 from chromadb_functions import create_database,load_database_from_dir,add_documents_to_database
 from dotenv import load_dotenv
 import requests
@@ -69,12 +70,11 @@ def jsonToElements(json_data,filename="Unknown",trust_score=50):
             filename=filename,
             trust_score=trust_score,
             page_number=0,
-            coordinates=coordinate_system,
             languages=['en']
         )
 
         # Initialize Element object
-        element = Element(
+        element = CustomElement(
             element_id=None,
             coordinates=((0, 0), (0, 0)),
             coordinate_system=coordinate_system,
@@ -102,8 +102,8 @@ files_dir = "./RAG/Database/Input"
 db_folder = "./RAG/Database/Output"
 
 #The api url
-#url = "http://127.0.0.1:5000/process-pdf-fast"
-url = "http://127.0.0.1:5000/process-pdf-yolox"
+url = "http://127.0.0.1:5000/process-pdf-fast"
+#url = "http://127.0.0.1:5000/process-pdf-yolox"
 #url = "http://127.0.0.1:5000/process-docx"
 #url = "http://127.0.0.1:5000/process-html"
 #url = "http://127.0.0.1:5000/process-txt"
