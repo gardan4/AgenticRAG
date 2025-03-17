@@ -102,11 +102,11 @@ files_dir = "./RAG/Database/Input"
 db_folder = "./RAG/Database/Output"
 
 #The api url
-url = "http://127.0.0.1:5000/process-pdf-fast"
+#url = "http://127.0.0.1:5000/process-pdf-fast"
 #url = "http://127.0.0.1:5000/process-pdf-yolox"
 #url = "http://127.0.0.1:5000/process-docx"
 #url = "http://127.0.0.1:5000/process-html"
-#url = "http://127.0.0.1:5000/process-txt"
+url = "http://127.0.0.1:5000/process-txt"
 
 input_files_list = get_all_files(files_dir)
 skip_file = ""
@@ -125,10 +125,10 @@ if(not db_exists):
 
             # Print the response from the server
             if response.status_code == 200:
-                print("File uploaded successfully!")
                 initial_elements = jsonToElements(json_data=response,filename=os.path.basename(input_files_list[0]),trust_score=batch_trust_score)
                 db_exists = create_database(initial_elements,db_folder)
                 skip_first_file=input_files_list[0]
+                print("File uploaded successfully!({file_path})")
             else:
                 print(f"Error: {response.status_code}")
                 print(response.json())
@@ -152,7 +152,7 @@ if db_exists:
 
                     # Print the response from the server
                     if response.status_code == 200:
-                        print("File uploaded successfully!")
+                        print(f"File uploaded successfully!({file_path})")
                         new_pdf_elements = jsonToElements(json_data=response,filename=os.path.basename(file_path),trust_score=batch_trust_score)
                         add_documents_to_database(new_pdf_elements,db)
                     else:

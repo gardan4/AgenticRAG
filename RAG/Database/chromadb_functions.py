@@ -187,14 +187,16 @@ def add_documents_to_database(input_elements, vectorstore):
     """
     try:
         # Chunk the input elements and create documents
-        elements = custom_chunk_by_title(input_elements)
+        elements = custom_chunk_by_title(input_elements=input_elements,overlap=140)
         new_documents = []
         for element in elements:
             metadata = element.metadata.to_dict()
-            del metadata["languages"]
             metadata["source"] = metadata["filename"]
             new_documents.append(Document(page_content=element.text, metadata=metadata))
-        
+            # Remove metadata items that are lists
+            keys_to_remove = [key for key, value in metadata.items() if isinstance(value, list)]
+            for key in keys_to_remove:
+                del metadata[key]
         # Add new documents to the existing vector store
         vectorstore.add_documents(new_documents)
         

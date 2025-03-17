@@ -40,11 +40,11 @@ def query_database(query_text, db_folder, k=5, min_trust_score=0):
     
 
 
-query = "music"
-db_path = "./RAG/Database/Output"
-max_docs = 5
-min_trust = 0
+#query = "To shuffle or not"
+#db_path = "./RAG/Database/Output"
+#max_docs = 5
+#min_trust = 0
 
-result = query_database(query, db_path, max_docs, min_trust)
+#result = query_database(query, db_path, max_docs, min_trust)
 
-print(result)
+#print(result)

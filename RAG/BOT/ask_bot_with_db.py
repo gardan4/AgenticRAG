@@ -3,6 +3,7 @@ import os
 from openai_bot import OpenAI_GPT_Bot
 from pydantic_bot import PydanticAIBot
 from context_prep_bot import prep_context
+from removeRepeatingContext import remove_repeating_context
 
 # Change current dir to Database folder to access functions there
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Database')))
@@ -16,9 +17,10 @@ db_path = "./RAG/Database/Output"
 max_docs = 3
 
 #Ask your question here:
-question = "Help me with my research topic about training data shuffling and whether or not that is good. What should I learn before I start with my project? What literature can be useful? For the literature you propose, give a short explanation of what it is."
+#question = "I need help with finding information about topics that are referenced as useful under my project topic. My project topic is called To shuffle, or not to shuffle, this is the question, and it is related to training data in neural networks."
+question = "My project topic is called Deep Drug Recommender. Please find an abstract of information about one of the references of that topic and return that abstract plus the reference from which you found it."
 
-initial_context = "\n".join(query_database(question,db_path,max_docs))
+initial_context = query_database(question,db_path,max_docs)
 
 information_context = prep_context(db_path, 5, question, initial_context)
 
@@ -36,7 +38,32 @@ Context:
 
 combined_context = template_context.format(context=information_context)
 
+combined_context = remove_repeating_context(combined_context)
+
 bot_response = str(bot.ask(question=question, context=combined_context))
 
+#Additional check if a better answer can be given.
+
+if(not "I don't know." in bot_response):
+    post_answer_check = query_database(bot_response,db_path,max_docs+2)
+
+    template_context2 = """You are an assistant that answers questions based strictly on the context provided below.
+    If the question is not directly answerable from the provided context, simply respond with "I don't know." 
+    Do not make up answers or use your pre-trained knowledge to answer the question.
+    Do not ask follow-up questions, only provide answers.
+    Answer the question directly, without any introductory phrases or explanations. 
+    In the context bellow you have the previous attempt to answer the question (initial answer) plus results from querying a vector database with that previous answer. Provide the final answer to the user, if the intial answer is not good enough or more precise answer can be given now, do so.
+
+    Context:
+    =========
+    {context}
+    =========
+    """
+
+    combined_context2 = template_context2.format(context=(information_context + "\n" +post_answer_check+"\n\nInitial Answer:\n"+bot_response))
+    combined_context2 = remove_repeating_context(combined_context2)
+    final_bot_response = str(bot.ask(question=question, context=combined_context2))
+else:
+    final_bot_response = bot_response
 print("Final Response:\n\n\n-------------------------------------\n\n")
-print(bot_response)
+print(final_bot_response)

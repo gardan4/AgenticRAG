@@ -23,7 +23,7 @@ def prep_context(db_path, max_docs, user_question, initial_context):
 
     bot_keywords = str(bot.ask(question=user_question, context=combined_context)).replace("END OF CONTEXT","").replace("\n","")
 
-    additional_context = "\n".join(query_database(bot_keywords,db_path,max_docs))
+    additional_context = query_database(bot_keywords,db_path,max_docs)
 
     final_context = initial_context + "\n" + additional_context
 

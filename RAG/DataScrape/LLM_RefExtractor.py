@@ -42,7 +42,7 @@ def extract_references_from_text(text):
         messages=[
             {"role": "system", "content": '''I need you to provide me in JSON format information from the text in the prompt. 
                                           The text consists of research topics, and for each topic, I want you to extract the title, 
-                                          the (references)/(extra reading material) in URLs as well as non-URL references. 
+                                          the (references)/(extra reading material) written as text and the URLs as well if those are present. Seperate the name of the reference and the found url with |. 
                                           The extracted references should be stored in a JSON array with the fields 'Title' and 'References'.
                                           Only write information that is present in the prompt (Copy paste the relevant stuff). Don't generate any new text.
                                           Reply with just the json, with no extra text.
@@ -52,15 +52,15 @@ def extract_references_from_text(text):
                                                 {
                                                     "Title": "Research Topic 1",
                                                     "References": [
-                                                    "https://www.example.com",
-                                                    "http://www.example2.com"
+                                                    "Paper on examples written by Dr. John Doe | https://www.example.com",
+                                                    "Paper on examples2 written by Dr. Smith | http://www.example2.com"
                                                     ]
                                                 },
                                                 {
                                                     "Title": "Research Topic 2",
                                                     "References": [
-                                                    "Reference 1",
-                                                    "Reference 2"
+                                                    "Other paper on examples written by Dr. John Doe |",
+                                                    "Paper on stuff written by Prof. Karl |"
                                                     ]
                                                 }
                                             ]
@@ -127,16 +127,16 @@ def extract_abstract_from_html(html):
     
     return response.choices[0].message.content
 
-def save_abstract_to_file(title, abstract,dir,counter):
+def save_abstract_to_file(title,ref_title, abstract,dir,counter):
     os.makedirs(dir, exist_ok=True)
 
     # Sanitize filename (replace problematic characters)
-    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
+    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in ref_title)
     file_path = os.path.join(dir, f"{safe_title+"_Ref_"+str(counter)}.txt")
 
     # Write the title and abstract to the file
     with open(file_path, "w", encoding="utf-8") as file:
-        file.write(f"{title}\n\n{abstract}")
+        file.write(f"Reference to {title}\n\n{abstract}")
     
 def preprocess_json_string(json_str):
     try:
@@ -181,13 +181,19 @@ def save_abstracts_from_refs(json_data,output_path):
         refCounter = 0
         for ref in references:
             refCounter += 1
-            if ref.startswith("http"):
-                html_content = extract_html_from_url(ref)
-                cleaned_text = clean_html(html_content,ref)
+            if "http" in ref:
+                ref = ref.replace("///", "://")
+                ref_title = ref.split('|', 1)[0].strip()
+                ref = ref.split('|', 1)[1].strip()
+                if ".pdf" in ref:
+                    cleaned_text = extract_text_from_online_pdf(ref)
+                else:
+                    html_content = extract_html_from_url(ref)
+                    cleaned_text = clean_html(html_content,ref)
                 if cleaned_text!="":
                     abstract = extract_abstract_from_html(cleaned_text)
                     if "no abstract found" not in abstract.lower():
-                        save_abstract_to_file(title, abstract, output_path,refCounter)
+                        save_abstract_to_file(title, ref_title, abstract, output_path,refCounter)
             else:
                 #Could add logic for searching non url references
                 print("Non-URL reference:", ref)
