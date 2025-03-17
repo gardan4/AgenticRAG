@@ -42,7 +42,7 @@ def extract_references_from_text(text):
         messages=[
             {"role": "system", "content": '''I need you to provide me in JSON format information from the text in the prompt. 
                                           The text consists of research topics, and for each topic, I want you to extract the title, 
-                                          the (references)/(extra reading material) written as text and the URLs as well if those are present. Seperate the name of the reference and the found url with |. 
+                                          the (references)/(extra reading material) written as text and the URLs as well if those are present. Seperate the name of the reference and the found url with |. If only url is found it must be on the right of |, and if only text reference is found it must be on the left of |. 
                                           The extracted references should be stored in a JSON array with the fields 'Title' and 'References'.
                                           Only write information that is present in the prompt (Copy paste the relevant stuff). Don't generate any new text.
                                           Reply with just the json, with no extra text.
@@ -61,6 +61,13 @@ def extract_references_from_text(text):
                                                     "References": [
                                                     "Other paper on examples written by Dr. John Doe |",
                                                     "Paper on stuff written by Prof. Karl |"
+                                                    ]
+                                                },
+                                                {
+                                                    "Title": "Research Topic 3",
+                                                    "References": [
+                                                    "|http://www.exampleOnlyUrlFound.com",
+                                                    "Some document |"http://www.normalexampleagain.com""
                                                     ]
                                                 }
                                             ]
@@ -99,6 +106,10 @@ def clean_html(html_content, base_url=None):
         except Exception as e:
             print(f"Error fetching redirected URL: {e}")
             return ''
+    
+    # Extract text from meta tags if they contain useful content
+    meta_abstract = soup.find("meta", attrs={"name": "citation_abstract"})
+    abstract_text = meta_abstract["content"].strip() if meta_abstract else ""
 
     # Remove script, style, and unwanted tags
     for tag in soup(["script", "style", "footer", "nav", "aside"]):
@@ -110,7 +121,10 @@ def clean_html(html_content, base_url=None):
     # Normalize spaces
     main_text = " ".join(main_text.split())
 
-    return main_text if main_text else ""
+    # Combine extracted text and abstract
+    final_text = f"Abstract: {abstract_text}\n\n{main_text}" if abstract_text else main_text
+
+    return final_text if final_text.strip() else ""
 
 def extract_abstract_from_html(html):
     client = openai.OpenAI()
@@ -118,8 +132,8 @@ def extract_abstract_from_html(html):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "If the following html contains an abstract for a research paper, extract the abstract word for word and provide it in the response without any extra explanations. "
-            "If the html does not contain an abstract, respond with only 'No abstract found'."},
+            {"role": "system", "content": "If the following html/text contains an abstract for a research paper, extract the abstract word for word and provide it in the response without any extra explanations. "
+            "If the html/text does not contain an abstract, it might contain information that is considered the abstract. If the information feels irrelevant or there is nothing of substance found in the text, simply respond only with 'No abstract found'."},
             {"role": "user", "content": html}
         ],
         temperature=0
@@ -127,16 +141,26 @@ def extract_abstract_from_html(html):
     
     return response.choices[0].message.content
 
-def save_abstract_to_file(title,ref_title, abstract,dir,counter):
+def save_abstract_to_file(title, ref_title, abstract, dir, counter):
     os.makedirs(dir, exist_ok=True)
 
-    # Sanitize filename (replace problematic characters)
+    # Sanitize filename (limit length and remove invalid characters)
     safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in ref_title)
-    file_path = os.path.join(dir, f"{safe_title+"_Ref_"+str(counter)}.txt")
+
+    # Limit filename length to avoid Windows path limits - Truncate to 100 chars
+    safe_title = safe_title[:100]
+
+    file_name = f"{safe_title}_Ref_{counter}.txt"
+    file_path = os.path.join(dir, file_name)
+
+    # Normalize path to avoid issues with mixed separators
+    file_path = os.path.normpath(file_path)
 
     # Write the title and abstract to the file
     with open(file_path, "w", encoding="utf-8") as file:
         file.write(f"Reference to {title}\n\n{abstract}")
+
+    return file_path
     
 def preprocess_json_string(json_str):
     try:
@@ -181,22 +205,37 @@ def save_abstracts_from_refs(json_data,output_path):
         refCounter = 0
         for ref in references:
             refCounter += 1
-            if "http" in ref:
-                ref = ref.replace("///", "://")
-                ref_title = ref.split('|', 1)[0].strip()
-                ref = ref.split('|', 1)[1].strip()
-                if ".pdf" in ref:
-                    cleaned_text = extract_text_from_online_pdf(ref)
+            ref = ref.strip()  # Ensure there are no leading/trailing spaces
+
+            if "|" in ref:  # Check if the reference contains '|'
+                ref_title, ref_url = ref.split('|', 1)
+                ref_title = ref_title.strip()
+                ref_url = ref_url.strip()
+                
+                # Sometimes there is no title and the url is placed in the title field
+                if ref_url=="" and "http" in ref_title:
+                    ref_url = ref_title
+
+                if "http" in ref_url:
+                    ref_url = ref_url.replace("///", "://")
+                    
+                    if ".pdf" in ref_url:
+                        cleaned_text = extract_text_from_online_pdf(ref_url)
+                    else:
+                        html_content = extract_html_from_url(ref_url)
+                        cleaned_text = clean_html(html_content, ref_url)
+
+                    if cleaned_text:
+                        abstract = extract_abstract_from_html(cleaned_text)
+                        if "no abstract found" not in abstract.lower():
+                            if ref_title=="":
+                                ref_title = title+"_NoNameReference_"+str(refCounter)
+                            save_abstract_to_file(title, ref_title, abstract, output_path, refCounter)
                 else:
-                    html_content = extract_html_from_url(ref)
-                    cleaned_text = clean_html(html_content,ref)
-                if cleaned_text!="":
-                    abstract = extract_abstract_from_html(cleaned_text)
-                    if "no abstract found" not in abstract.lower():
-                        save_abstract_to_file(title, ref_title, abstract, output_path,refCounter)
+                    print("Invalid URL reference:", ref_url)
             else:
-                #Could add logic for searching non url references
-                print("Non-URL reference:", ref)
+                print("Skipping reference without a URL:", ref)
+
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
