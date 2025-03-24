@@ -31,6 +31,6 @@ class PydanticAIBot:
         string: The bot's response to the prompt.
         """
         # Combine the context and question to form the prompt
-        prompt = f"Context: {context}\nQuestion: {question}\nAnswer:"
+        prompt = f"{context}\n{question}"
         response = self.agent.run_sync(prompt)
         return response.data.strip()

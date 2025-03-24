@@ -19,8 +19,8 @@ max_docs = 3
 #Ask your question here:
 #question = "I need help with finding information about topics that are referenced as useful under my project topic. My project topic is called To shuffle, or not to shuffle, this is the question, and it is related to training data in neural networks."
 question = "My project topic is called Deep Drug Recommender. Please find an abstract of information about one of the references of that topic and return that abstract plus the reference from which you found it."
-
 initial_context = query_database(question,db_path,max_docs)
+question="Question: "+question
 
 information_context = prep_context(db_path, 5, question, initial_context)
 
