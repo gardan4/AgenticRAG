@@ -172,3 +172,5 @@ cython_debug/
 
 # Contents from RAG folder
 RAG/test.py
+AGENT/data/processed
+AGENT/data/raw
