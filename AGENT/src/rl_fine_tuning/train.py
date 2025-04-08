@@ -16,20 +16,37 @@ logger = get_logger(__name__)
 class GRPOFineTuner:
     def __init__(self, model_name, config):
         self.config = config
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        config.quantization_config = None  # remove the problematic config key
 
-        self.model = AutoModelForCausalLM.from_pretrained(
+        # Pin the revision to avoid auto-updating to a new version.
+        revision = config.get("revision", "main")  # set a commit hash or tag
+
+        # Load configuration with custom code enabled
+        model_config = AutoConfig.from_pretrained(
             model_name,
-            config=config,
+            revision=revision,
             trust_remote_code=True
         )
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=config["lr"])
-        # Create a reference policy (a frozen snapshot of the current model)
+
+        # Load the tokenizer using the pinned revision and trust_remote_code option.
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            revision=revision,
+            trust_remote_code=True
+        )
+        
+        # Load the model using the modified configuration
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            config=model_config,
+            revision=revision,
+            trust_remote_code=True
+        )
+        
+        # Also load a reference model as a frozen snapshot, using the same config.
         self.reference_model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            config=config,
+            config=model_config,
+            revision=revision,
             trust_remote_code=True
         )
         self.reference_model.eval()
@@ -172,6 +189,7 @@ def main():
     }
     # Replace with your model name or local path
     model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+
     # Example dataset: list of (prompt, reference) pairs
     dataset = [
         ("What is the capital of France?", "Paris"),
