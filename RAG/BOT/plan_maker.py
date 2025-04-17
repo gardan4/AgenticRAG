@@ -9,7 +9,7 @@ from removeRepeatingContext import remove_repeating_context
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Database')))
 from queryDB import query_database
 
-def make_plan(db_path = "./RAG/Database/Output", task = "",max_docs = 3,temp=0.7):
+def make_plan(db_path = "./RAG/Database/Output", task = "",max_docs = 3,temp=0.7,return_bot_context=False):
     #bot = OpenAI_GPT_Bot(model="gpt-4o-mini",temperature=temp)
     bot = PydanticAIBot(model="gpt-4o-mini",temperature=temp)
 
@@ -46,7 +46,14 @@ def make_plan(db_path = "./RAG/Database/Output", task = "",max_docs = 3,temp=0.7
     combined_context2 = remove_repeating_context(combined_context2)
     final_bot_response = str(bot.ask(question=task, context=combined_context2))
 
-    return final_bot_response
+    if return_bot_context:
+        return {
+            "plan": final_bot_response,
+            "context": post_keywords_query
+        }
+    else:
+        return final_bot_response
+
 
 
 #test_task = "Create a project plan for my research project, called: A Thousand Games A Day"

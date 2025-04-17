@@ -1,0 +1,1 @@
+This file is here, only to be able to push the folder to git since it is needed for the parsing service to function.
