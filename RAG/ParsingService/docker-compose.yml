@@ -1,0 +1,15 @@
+services:
+  flask_app:
+    platform: linux/amd64
+    build: 
+      context: .
+      dockerfile: Dockerfile
+
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    environment:
+      - CUDA_VISIBLE_DEVICES=""
+      - FLASK_APP=parsingAPI.py
+      - FLASK_ENV=development

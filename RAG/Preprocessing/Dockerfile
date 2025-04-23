@@ -1,1 +1,0 @@
-#For creating a docker container with parsing services
