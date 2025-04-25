@@ -174,3 +174,12 @@ cython_debug/
 RAG/test.py
 AGENT/data/processed
 AGENT/data/raw
+
+RAG/Database/Input/*
+RAG/Database/Output/*
+RAG/DataScrape/Input*
+RAG/DataScrape/Abstracts*
+testURL.py
+testDB.py
+RAG/BOT/InputFiles
+

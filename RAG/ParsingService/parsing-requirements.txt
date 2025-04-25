@@ -1,0 +1,25 @@
+#Python 3.10 required for these packages
+#It is also needed to install locally tesseract-ocr and poppler-utils and add them to PATH
+
+flask
+python-dotenv
+unstructured
+unstructured-ingest[remote]
+unstructured[pptx]
+markdown
+unstructured[markdown]
+pydantic
+chromadb
+PyPDF2
+layoutparser
+Pillow
+numpy
+opencv-python
+pytesseract
+langchain-community
+langchain-core
+langchain-openai
+unstructured[pdf]
+unstructured-inference==0.7.36
+unstructured_client
+#python-magic-bin Uncomment for windows (Reaplce with python-magic for linux)
