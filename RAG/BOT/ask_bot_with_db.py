@@ -30,6 +30,9 @@ Do not make up answers or use your pre-trained knowledge to answer the question.
 Do not ask follow-up questions, only provide answers.
 Answer the question directly, without any introductory phrases or explanations. 
 
+In the following context make sure to prioritize text that is marked with higher trust score. In case of conflicting information, always use the one with higher trust score or if the trust score is the same, make an educated decision on which one is more plausible.
+Also use the information for file name to consider the type of source giving you the information and whether or not that should be trusted and used more or less.
+Also consider any dates that you can find in the filenames or the text itself. You should prioritize more recent information if that is possible.
 Context:
 =========
 {context}
