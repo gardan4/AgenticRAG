@@ -2,11 +2,23 @@
 
 import torch
 import wandb
+import argparse
+import os
+import sys
+import json
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+agent_dir = os.path.dirname(os.path.dirname(current_dir))  # Go up two levels to AGENT
+if agent_dir not in sys.path:
+    sys.path.insert(0, agent_dir)
+
+# Now imports will work when running from AGENT/
 from src.reward.reward_function import compute_reward
 from src.utils.logging_utils import get_logger
 
-SYSTEM_MESSAGE = "You are Qwen. You are a helpful, but brief assistant."
+# Replace the existing SYSTEM_MESSAGE with this new one
+SYSTEM_MESSAGE = "You are an experienced Scrum Master. Your task is to generate clear, well-structured user stories based on sprint goals. Follow the standard user story format: 'As a [user role], I want [action], so that [benefit]'. Make sure stories are aligned with the sprint goal, specific, measurable, and achievable."
 
 logger = get_logger(__name__)
 
@@ -100,10 +112,10 @@ class GRPOFineTuner:
           5. Compute the clipped surrogate objective and add a KL penalty.
           6. Backpropagate and update the model.
         """
-        # Use the chat template: prepend the system message.
-        chat_prompt = f"{SYSTEM_MESSAGE}\n{prompt}"
+        # Use the chat template: prepend the system message and format as a sprint goal task
+        chat_prompt = f"{SYSTEM_MESSAGE}\n\nSprint Goal: {prompt}\n\nGenerate appropriate user stories for this sprint goal:"
         print(f"\n=== Chat Prompt: {chat_prompt} ===")
-        
+    
         inputs = self.tokenizer(chat_prompt, return_tensors='pt').to(self.device)
         
         group_outputs = []
@@ -182,29 +194,77 @@ class GRPOFineTuner:
         print("\nTraining complete.")
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Train a model using GRPO fine-tuning')
+    parser.add_argument('--model', default="Qwen/Qwen2.5-0.5B-Instruct", 
+                        help='Model name to use (default: Qwen/Qwen2.5-0.5B-Instruct)')
+    parser.add_argument('--epochs', type=int, default=1, 
+                        help='Number of epochs to train (default: 1)')
+    parser.add_argument('--max_length', type=int, default=150, 
+                        help='Maximum token length for generation (default: 150)')
+    parser.add_argument('--lr', type=float, default=1e-5, 
+                        help='Learning rate (default: 1e-5)')
+    parser.add_argument('--dataset', default=None, 
+                        help='Path to dataset JSONL file (default: ../data/sprint_goals_training_data.jsonl)')
+    parser.add_argument('--use_wandb', action='store_true', 
+                        help='Enable Weights & Biases logging')
+    parser.add_argument('--project', default='sprint_goals_rag',
+                        help='Weights & Biases project name (default: sprint_goals_rag)')
+    parser.add_argument('--experiment', default='sprint_goals_rl_tuning',
+                        help='Experiment name for Weights & Biases (default: sprint_goals_rl_tuning)')
+    args = parser.parse_args()
+
+    # Set up configuration
     config = {
-        "lr": 1e-5,
-        "epochs": 1,
-        "max_length": 20,
+        "lr": args.lr,
+        "epochs": args.epochs,
+        "max_length": args.max_length,
         "num_samples": 5,
         "epsilon": 0.2,
         "beta": 0.01,
         "update_ref_every": 10,
-        "use_wandb": False,
-        "wandb_project": "deepseek_rl_project",
-        "experiment_name": "run1_grpo_r1",
-        "revision": "main",  # Pin a specific commit or tag if desired.
+        "use_wandb": args.use_wandb,
+        "wandb_project": args.project,
+        "experiment_name": args.experiment,
+        "revision": "main",
     }
-    # Use the Qwen instruct model with chat formatting.
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+    # Use the model specified in arguments
+    model_name = args.model
 
-    # Example dataset of (prompt, reference) pairs.
-    dataset = [
-        ("What is the capital of France?", "Paris"),
-        ("Who wrote 1984?", "George Orwell")
-    ]
+    # Determine the path to the JSONL file based on current directory
+    if args.dataset:
+        jsonl_path = args.dataset
+    else:
+        # Try to locate the dataset file
+        possible_paths = [
+            os.path.join('..', 'data', 'sprint_goals_training_data.jsonl'),  # When in src/rl_fine_tuning
+            os.path.join('data', 'sprint_goals_training_data.jsonl'),        # When in AGENT root
+            os.path.join('.', 'data', 'sprint_goals_training_data.jsonl')    # Alternative for AGENT root
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                jsonl_path = path
+                break
+        else:
+            raise FileNotFoundError(
+                "Could not find sprint_goals_training_data.jsonl. Please specify the path with --dataset")
+
+    # Load the dataset
+    print(f"Loading dataset from: {jsonl_path}")
+    sprint_dataset = []
+    with open(jsonl_path, 'r') as file:
+        for line in file:
+            if line.strip():  # Skip empty lines
+                data = json.loads(line)
+                # Format as (prompt, reference) pairs where prompt is sprint_goal and reference is formatted_issues
+                sprint_dataset.append((data['sprint_goal'], data['formatted_issues']))
+    
+    print(f"Loaded {len(sprint_dataset)} sprint goal training examples")
+
+    # Initialize and train the model
     trainer = GRPOFineTuner(model_name, config)
-    trainer.train_loop(dataset)
+    trainer.train_loop(sprint_dataset)
 
 if __name__ == "__main__":
     main()
