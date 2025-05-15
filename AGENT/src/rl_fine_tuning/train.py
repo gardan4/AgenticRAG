@@ -83,48 +83,119 @@ class GRPOFineTuner:
 
     def differentiable_sample(self, inputs):
         """
-        Generate a sequence token-by-token in a memory-efficient way.
+        Generate a sequence token-by-token in a memory-efficient way with gradient control.
         """
         generated_tokens = []
         total_log_prob = 0.0
+        all_logits = []
+        all_next_tokens = []
         
         # Ensure the inputs are on the correct device
         current_inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        use_inference_no_grad = self.config.get("inference_no_grad", False)
         
-        # Use autocast for mixed precision if not explicitly using float32
-        device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
-        with torch.amp.autocast(device_type=device_type, enabled=True):
-            for _ in range(self.config.get("max_length", 100)):  # Potentially reduced from default
-                outputs = self.model(**current_inputs)
-                
-                # Get logits for the next token (last position)
-                next_token_logits = outputs.logits[:, -1, :]
-                
-                # Sample a token from the probability distribution
-                probs = torch.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-                
-                # Compute log probability for the sampled token
-                token_log_prob = torch.log(probs.gather(1, next_token) + 1e-8)
-                total_log_prob = total_log_prob + token_log_prob.squeeze()
-                
-                token_id = next_token.item()
-                generated_tokens.append(token_id)
-                if token_id == self.tokenizer.eos_token_id:
-                    break
+        # First generate the sequence without gradients to save memory
+        if use_inference_no_grad:
+            with torch.no_grad():
+                device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+                with torch.amp.autocast(device_type=device_type, enabled=True):
+                    for _ in range(self.config.get("max_length", 100)):
+                        # Forward pass
+                        outputs = self.model(**current_inputs)
+                        next_token_logits = outputs.logits[:, -1, :]
+                        
+                        # Store logits for later gradient computation
+                        all_logits.append(next_token_logits.detach().clone())
+                        
+                        # Sample token
+                        probs = torch.softmax(next_token_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1)
+                        all_next_tokens.append(next_token.detach().clone())
+                        
+                        token_id = next_token.item()
+                        generated_tokens.append(token_id)
+                        
+                        if token_id == self.tokenizer.eos_token_id:
+                            break
+                        
+                        # Update input IDs for next step
+                        current_input_ids = torch.cat([current_inputs["input_ids"], next_token], dim=-1)
+                        current_inputs = {"input_ids": current_input_ids.to(self.device)}
+                        
+                        # Free memory
+                        del outputs, next_token_logits
+            
+            # Now recompute log probabilities with gradients enabled
+            with torch.enable_grad():
+                for logits, token in zip(all_logits, all_next_tokens):
+                    # Ensure we have tensors that require gradient
+                    logits_with_grad = logits.detach().requires_grad_()
+                    probs = torch.softmax(logits_with_grad, dim=-1)
+                    token_log_prob = torch.log(probs.gather(1, token) + 1e-8)
+                    total_log_prob = total_log_prob + token_log_prob.squeeze()
+        
+        else:
+            # Original implementation with gradients enabled
+            device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+            with torch.amp.autocast(device_type=device_type, enabled=True):
+                for _ in range(self.config.get("max_length", 100)):
+                    outputs = self.model(**current_inputs)
+                    next_token_logits = outputs.logits[:, -1, :]
+                    probs = torch.softmax(next_token_logits, dim=-1)
+                    next_token = torch.multinomial(probs, num_samples=1)
                     
-                # Update input IDs for next step
-                current_input_ids = torch.cat([current_inputs["input_ids"], next_token], dim=-1)
-                current_inputs = {"input_ids": current_input_ids.to(self.device)}
-                
-                # Delete intermediates to free memory
-                del outputs, next_token_logits
-                
-        # Clear CUDA cache after generation
+                    token_id = next_token.item()
+                    generated_tokens.append(token_id)
+                    
+                    token_log_prob = torch.log(probs.gather(1, next_token) + 1e-8)
+                    total_log_prob = total_log_prob + token_log_prob.squeeze()
+                    
+                    if token_id == self.tokenizer.eos_token_id:
+                        break
+                    
+                    current_input_ids = torch.cat([current_inputs["input_ids"], next_token], dim=-1)
+                    current_inputs = {"input_ids": current_input_ids.to(self.device)}
+                    
+                    del outputs, next_token_logits
+        
+        # Clear cache
         if torch.cuda.is_available() and self.config.get("aggressive_cache_clearing", False):
             torch.cuda.empty_cache()
-            
+        
         return generated_tokens, total_log_prob
+
+    def compute_sequence_log_prob(self, inputs, token_sequence, device):
+        """
+        Compute log probability of a given token sequence under the reference model.
+        """
+        total_log_prob = 0.0
+        current_inputs = inputs
+        
+        with torch.no_grad():
+            for i in range(len(token_sequence)):
+                # Get the current token
+                token = token_sequence[i]
+                
+                # Forward pass with reference model
+                outputs = self.reference_model(**current_inputs)
+                next_token_logits = outputs.logits[:, -1, :]
+                
+                # Get probability of the actual token
+                probs = torch.softmax(next_token_logits, dim=-1)
+                token_tensor = torch.tensor([[token]], device=device)
+                token_log_prob = torch.log(probs.gather(1, token_tensor) + 1e-8)
+                total_log_prob = total_log_prob + token_log_prob.squeeze()
+                
+                # Update inputs for next token (if not the last token)
+                if i < len(token_sequence) - 1:
+                    next_token = torch.tensor([[token]], device=device)
+                    current_input_ids = torch.cat([current_inputs["input_ids"], next_token], dim=-1)
+                    current_inputs = {"input_ids": current_input_ids}
+                
+                # Free memory
+                del outputs, next_token_logits
+                
+        return total_log_prob
 
     def train_step(self, prompt, reference):
         """
@@ -133,7 +204,7 @@ class GRPOFineTuner:
         # Use the chat template: prepend the system message and format as a sprint goal task
         chat_prompt = f"{SYSTEM_MESSAGE}\n\nSprint Goal: {prompt}\n\nGenerate appropriate user stories for this sprint goal:"
         print(f"\n=== Chat Prompt: {chat_prompt} ===")
-    
+
         inputs = self.tokenizer(chat_prompt, return_tensors='pt')
         
         group_outputs = []
@@ -154,22 +225,26 @@ class GRPOFineTuner:
                     
                 # Process one sample at a time
                 sample_inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                # Generate with current model and get log probability
                 generated_tokens, sample_log_prob = self.differentiable_sample(sample_inputs)
                 generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 
+                # Store outputs and reward
                 group_outputs.append(generated_text)
                 reward = compute_reward(generated_text, reference)
                 rewards.append(reward)
                 
-                # Handle log probabilities
+                # Current model log probabilities
                 log_probs.append(sample_log_prob)
                 
-                # For reference model (potentially on CPU)
-                if self.config.get("cpu_offload", False):
-                    with torch.no_grad():
-                        old_log_probs.append(sample_log_prob.detach().cpu())
-                else:
-                    old_log_probs.append(sample_log_prob.detach())
+                # Get log probabilities from reference model (this is the key change!)
+                ref_device = "cpu" if self.config.get("cpu_offload", False) else self.device
+                with torch.no_grad():
+                    # We need to compute the same sequence's probability under the reference model
+                    ref_inputs = {k: v.to(ref_device) for k, v in inputs.items()}
+                    ref_log_prob = self.compute_sequence_log_prob(ref_inputs, generated_tokens, ref_device)
+                    old_log_probs.append(ref_log_prob)
                     
                 print(f"\n-- Sample {i+1} --")
                 print(f"Output: {generated_text}")
@@ -180,19 +255,36 @@ class GRPOFineTuner:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
         else:
-            # Original batch processing
+            # Fixed parallel batch processing
             for i in range(num_samples):
+                # Clear cache before processing to minimize memory usage
+                if torch.cuda.is_available() and self.config.get("aggressive_cache_clearing", False):
+                    torch.cuda.empty_cache()
+                    
+                # Generate with current model
                 inputs_gpu = {k: v.to(self.device) for k, v in inputs.items()}
                 generated_tokens, sample_log_prob = self.differentiable_sample(inputs_gpu)
                 generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                
+                # Store outputs and reward
                 group_outputs.append(generated_text)
                 reward = compute_reward(generated_text, reference)
                 rewards.append(reward)
                 log_probs.append(sample_log_prob)
-                old_log_probs.append(sample_log_prob.detach())
+                
+                # Compute log probabilities using reference model (FIX HERE)
+                ref_device = "cpu" if self.config.get("cpu_offload", False) else self.device
+                with torch.no_grad():
+                    ref_inputs = {k: v.to(ref_device) for k, v in inputs.items()}
+                    ref_log_prob = self.compute_sequence_log_prob(ref_inputs, generated_tokens, ref_device)
+                    old_log_probs.append(ref_log_prob)
+                    
                 print(f"\n-- Sample {i+1} --")
                 print(f"Output: {generated_text}")
                 print(f"Reward: {reward:.4f}")
+                
+                # Free memory
+                del generated_tokens, sample_log_prob
         
         # Move to appropriate devices and convert to tensors
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
@@ -210,6 +302,9 @@ class GRPOFineTuner:
         advantages = (rewards_tensor - mean_reward) / std_reward
 
         prob_ratios = torch.exp(log_probs_tensor - old_log_probs_tensor)
+        # Add a debug print to verify ratios
+        print(f"Debug - Raw prob ratios: {prob_ratios.tolist()}")
+        
         epsilon = self.config.get("epsilon", 0.2)
         clipped_ratios = torch.clamp(prob_ratios, 1 - epsilon, 1 + epsilon)
 
@@ -231,18 +326,6 @@ class GRPOFineTuner:
         # Clear cache after gradient update
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
-        self.iteration += 1
-        update_ref_every = self.config.get("update_ref_every", 10)
-        if self.iteration % update_ref_every == 0:
-            if self.config.get("cpu_offload", False):
-                # Copy model weights to CPU reference model
-                self.reference_model.load_state_dict({k: v.to('cpu') for k, v in self.model.state_dict().items()})
-            else:
-                self.reference_model.load_state_dict(self.model.state_dict())
-
-        if self.config.get("use_wandb", False):
-            wandb.log({"loss": loss.item(), "avg_reward": rewards_tensor.mean().item()})
 
         return loss.item(), group_outputs, rewards
 
@@ -308,6 +391,9 @@ def main():
                         help='Number of samples per prompt (default: 3)')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Number of prompts to process at once (default: 1)')
+    parser.add_argument('--inference_no_grad', action='store_true',
+                    help='Disable gradients during inference to save memory')
+                    
                         
     args = parser.parse_args()
 
@@ -330,6 +416,7 @@ def main():
         "sequential_batching": args.sequential_batching,
         "aggressive_cache_clearing": args.aggressive_cache_clearing,
         "batch_size": args.batch_size,
+        "inference_no_grad": args.inference_no_grad
     }
     
     # Use the model specified in arguments
