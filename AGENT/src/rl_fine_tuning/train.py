@@ -220,7 +220,7 @@ class GRPOFineTuner:
             print("Using sequential batching to save memory")
             for i in range(num_samples):
                 # Clear cache before each sample
-                if torch.cuda.is_available():
+                if torch.cuda.is_available() and self.config.get("aggressive_cache_clearing", False):
                     torch.cuda.empty_cache()
                     
                 # Process one sample at a time
@@ -254,37 +254,37 @@ class GRPOFineTuner:
                 del generated_tokens, sample_log_prob
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-        else:
-            # Fixed parallel batch processing
-            for i in range(num_samples):
-                # Clear cache before processing to minimize memory usage
-                if torch.cuda.is_available() and self.config.get("aggressive_cache_clearing", False):
-                    torch.cuda.empty_cache()
+        # else:
+        #     # Fixed parallel batch processing
+        #     for i in range(num_samples):
+        #         # Clear cache before processing to minimize memory usage
+        #         if torch.cuda.is_available() and self.config.get("aggressive_cache_clearing", False):
+        #             torch.cuda.empty_cache()
                     
-                # Generate with current model
-                inputs_gpu = {k: v.to(self.device) for k, v in inputs.items()}
-                generated_tokens, sample_log_prob = self.differentiable_sample(inputs_gpu)
-                generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        #         # Generate with current model
+        #         inputs_gpu = {k: v.to(self.device) for k, v in inputs.items()}
+        #         generated_tokens, sample_log_prob = self.differentiable_sample(inputs_gpu)
+        #         generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                 
-                # Store outputs and reward
-                group_outputs.append(generated_text)
-                reward = compute_reward(generated_text, reference)
-                rewards.append(reward)
-                log_probs.append(sample_log_prob)
+        #         # Store outputs and reward
+        #         group_outputs.append(generated_text)
+        #         reward = compute_reward(generated_text, reference)
+        #         rewards.append(reward)
+        #         log_probs.append(sample_log_prob)
                 
-                # Compute log probabilities using reference model (FIX HERE)
-                ref_device = "cpu" if self.config.get("cpu_offload", False) else self.device
-                with torch.no_grad():
-                    ref_inputs = {k: v.to(ref_device) for k, v in inputs.items()}
-                    ref_log_prob = self.compute_sequence_log_prob(ref_inputs, generated_tokens, ref_device)
-                    old_log_probs.append(ref_log_prob)
+        #         # Compute log probabilities using reference model (FIX HERE)
+        #         ref_device = "cpu" if self.config.get("cpu_offload", False) else self.device
+        #         with torch.no_grad():
+        #             ref_inputs = {k: v.to(ref_device) for k, v in inputs.items()}
+        #             ref_log_prob = self.compute_sequence_log_prob(ref_inputs, generated_tokens, ref_device)
+        #             old_log_probs.append(ref_log_prob)
                     
-                print(f"\n-- Sample {i+1} --")
-                print(f"Output: {generated_text}")
-                print(f"Reward: {reward:.4f}")
+        #         print(f"\n-- Sample {i+1} --")
+        #         print(f"Output: {generated_text}")
+        #         print(f"Reward: {reward:.4f}")
                 
-                # Free memory
-                del generated_tokens, sample_log_prob
+        #         # Free memory
+        #         del generated_tokens, sample_log_prob
         
         # Move to appropriate devices and convert to tensors
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=self.device)
