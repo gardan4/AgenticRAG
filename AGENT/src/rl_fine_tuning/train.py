@@ -165,7 +165,17 @@ class GRPOFineTuner:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
         # Load training state
-        self.start_epoch = checkpoint.get('epoch', 0)
+        epoch_value = checkpoint.get('epoch', 0)
+        if isinstance(epoch_value, str):
+            if epoch_value == "final":
+                self.start_epoch = 0  # Start from 0 if loading final checkpoint
+            else:
+                try:
+                    self.start_epoch = int(epoch_value)
+                except ValueError:
+                    self.start_epoch = 0
+        else:
+            self.start_epoch = int(epoch_value)
         self.iteration = checkpoint.get('iteration', 0)
         
         # Load training metrics if available
@@ -200,7 +210,7 @@ class GRPOFineTuner:
         }
         
         torch.save(checkpoint, checkpoint_path)
-        logger.info(f"Checkpoint saved to {checkpoint_path}")
+        logger.info(f"Checkpoint saved to {checkpoint_path} (iteration: {self.iteration})")
         
         # Also save a "latest" checkpoint for easy resuming
         latest_path = os.path.join(checkpoint_dir, "model_latest.pt")
@@ -507,22 +517,6 @@ class GRPOFineTuner:
             self.save_checkpoint(current_epoch, is_final=True)
         
         logger.info("Training complete.")
-
-    def save_checkpoint(self, epoch: int):
-        """Save model checkpoint."""
-        checkpoint_dir = self.config.get("checkpoint_dir", "./checkpoints")
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch}.pt")
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'config': self.config,
-            'training_metrics': self.training_metrics
-        }, checkpoint_path)
-        
-        logger.info(f"Checkpoint saved to {checkpoint_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="GRPO fine-tuning with checkpoint support")
