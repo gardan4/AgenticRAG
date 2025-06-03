@@ -173,7 +173,9 @@ cython_debug/
 # Contents from RAG folder
 RAG/test.py
 AGENT/data/processed
-AGENT/data/raw
+AGENT/data/TAWOS.sql
+AGENT/checkpoints
+AGENT/wandb
 
 RAG/Database/Input/*
 RAG/Database/Output/*
