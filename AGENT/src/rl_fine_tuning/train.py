@@ -573,8 +573,8 @@ def main():
         path = args.dataset
     else:
         candidates = [
-            os.path.join("..", "data", "sprint_goals_training_data.jsonl"),
-            os.path.join("data", "sprint_goals_training_data.jsonl"),
+            os.path.join("..", "data", "sprint_goals_training_data-qwen-3B.jsonl"),
+            os.path.join("data", "sprint_goals_training_data-qwen-3B.jsonl"),
         ]
         for p in candidates:
             if os.path.exists(p):
