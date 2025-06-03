@@ -14,7 +14,7 @@ def get_model(model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
     
     Args:
         model_name: Name of the SentenceTransformer model to use
-        
+    
     Returns:
         SentenceTransformer model
     """
@@ -34,7 +34,7 @@ def compute_similarity(text1: str, text2: str, model_name: str = "sentence-trans
         text1: First text
         text2: Second text
         model_name: SentenceTransformer model to use
-        
+    
     Returns:
         Similarity score between 0 and 1
     """
