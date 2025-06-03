@@ -180,6 +180,7 @@ AgenticRAG/data/TAWOS.sql
 AgenticRAG/wandb
 AgenticRAG/checkpoints
 
+
 RAG/Database/Input/*
 RAG/Database/Output/*
 RAG/DataScrape/Input*
