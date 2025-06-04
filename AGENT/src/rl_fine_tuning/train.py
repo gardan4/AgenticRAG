@@ -8,10 +8,11 @@ import wandb
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 import gc
 from typing import List, Tuple, Dict, Any
 import numpy as np
+
 
 # Project imports (adjust as needed)
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -62,22 +63,59 @@ SYSTEM_MESSAGE = (
 logger = get_logger(__name__)
 
 class SprintGoalDataset(Dataset):
-    """Dataset class for sprint goals and reference stories."""
+    """Dataset class for sprint goals and reference stories with improved data handling."""
     
-    def __init__(self, data_path: str):
+    def __init__(self, data_path: str, split: str = "train", train_split: float = 0.9):
+        """
+        Initialize dataset with train/val split capability.
+        
+        Args:
+            data_path: Path to the JSONL data file
+            split: Either "train" or "val" 
+            train_split: Fraction of data to use for training
+        """
         self.data = []
+        self.split = split
+        
+        # Load all data first
+        all_data = []
         with open(data_path) as f:
             for line in f:
                 if not line.strip():
                     continue
                 obj = json.loads(line)
-                self.data.append((obj["sprint_goal"], obj["formatted_issues"]))
+                all_data.append((obj["sprint_goal"], obj["formatted_issues"]))
+        
+        # Split data deterministically
+        split_idx = int(len(all_data) * train_split)
+        
+        if split == "train":
+            self.data = all_data[:split_idx]
+        elif split == "val":
+            self.data = all_data[split_idx:]
+        else:
+            raise ValueError(f"Invalid split: {split}. Must be 'train' or 'val'")
+        
+        logger.info(f"Loaded {len(self.data)} examples for {split} split")
     
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data[idx]
+        sprint_goal, formatted_issues = self.data[idx]
+        return {
+            'sprint_goal': sprint_goal,
+            'reference_stories': formatted_issues,
+            'idx': idx
+        }
+
+def collate_fn(batch):
+    """Custom collate function for the DataLoader."""
+    return {
+        'sprint_goals': [item['sprint_goal'] for item in batch],
+        'reference_stories': [item['reference_stories'] for item in batch],
+        'indices': [item['idx'] for item in batch]
+    }
 
 class GRPOFineTuner:
     def __init__(self, model_name: str, config: Dict[str, Any]):
@@ -383,38 +421,47 @@ class GRPOFineTuner:
             if self.config.get("cpu_offload", False):
                 self.reference_model.to("cpu")
 
-    def evaluate(self, dataset: List[Tuple[str, str]], num_samples: int = 5) -> Dict[str, float]:
-        """Evaluate model on a subset of data."""
+    def evaluate(self, dataloader: DataLoader, num_samples: int = 5) -> Dict[str, float]:
+        """Evaluate model on validation data."""
         self.model.eval()
         eval_rewards = []
-        
-        # Sample a subset for evaluation
-        eval_data = dataset[:num_samples] if len(dataset) > num_samples else dataset
+        samples_processed = 0
         
         with torch.no_grad():
-            for sprint_goal, reference_stories in eval_data:
-                prompt = (
-                    f"{SYSTEM_MESSAGE}\n\n"
-                    f"Sprint Goal: {sprint_goal}\n\n"
-                    "Generate appropriate user stories for this sprint goal:"
-                )
-                inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+            for batch in dataloader:
+                if samples_processed >= num_samples:
+                    break
                 
-                gen_out = self.model.generate(
-                    **inputs,
-                    do_sample=True,
-                    max_new_tokens=self.config["max_length"],
-                    temperature=0.7,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
+                sprint_goals = batch['sprint_goals']
+                reference_stories_list = batch['reference_stories']
                 
-                generated_text = self.tokenizer.decode(
-                    gen_out[0][inputs["input_ids"].shape[-1]:], 
-                    skip_special_tokens=True
-                )
-                
-                reward = compute_reward(generated_text, reference_stories)
-                eval_rewards.append(reward)
+                for sprint_goal, reference_stories in zip(sprint_goals, reference_stories_list):
+                    if samples_processed >= num_samples:
+                        break
+                        
+                    prompt = (
+                        f"{SYSTEM_MESSAGE}\n\n"
+                        f"Sprint Goal: {sprint_goal}\n\n"
+                        "Generate appropriate user stories for this sprint goal:"
+                    )
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+                    
+                    gen_out = self.model.generate(
+                        **inputs,
+                        do_sample=True,
+                        max_new_tokens=self.config["max_length"],
+                        temperature=0.7,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                    )
+                    
+                    generated_text = self.tokenizer.decode(
+                        gen_out[0][inputs["input_ids"].shape[-1]:], 
+                        skip_special_tokens=True
+                    )
+                    
+                    reward = compute_reward(generated_text, reference_stories)
+                    eval_rewards.append(reward)
+                    samples_processed += 1
         
         self.model.train()
         return {
@@ -422,14 +469,45 @@ class GRPOFineTuner:
             "eval_reward_std": np.std(eval_rewards)
         }
 
-    def train_loop(self, dataset: List[Tuple[str, str]]):
-        """Main training loop with infinite training support."""
-        # Split dataset for validation
-        split_idx = int(len(dataset) * 0.9)
-        train_data = dataset[:split_idx]
-        val_data = dataset[split_idx:]
+    def create_dataloaders(self, data_path: str) -> Tuple[DataLoader, DataLoader]:
+        """Create train and validation dataloaders."""
+        # Create datasets
+        train_dataset = SprintGoalDataset(data_path, split="train", train_split=0.9)
+        val_dataset = SprintGoalDataset(data_path, split="val", train_split=0.9)
         
-        logger.info(f"Training on {len(train_data)} examples, validating on {len(val_data)} examples")
+        # Create dataloaders
+        batch_size = self.config.get("batch_size", 1)
+        num_workers = self.config.get("num_workers", 0)
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,  # Shuffle training data
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=False
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,  # Don't shuffle validation data
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=False
+        )
+        
+        return train_loader, val_loader
+
+    def train_loop(self, data_path: str):
+        """Main training loop with DataLoader support."""
+        # Create dataloaders
+        train_loader, val_loader = self.create_dataloaders(data_path)
+        
+        logger.info(f"Training on {len(train_loader.dataset)} examples, validating on {len(val_loader.dataset)} examples")
+        logger.info(f"Batch size: {train_loader.batch_size}, Steps per epoch: {len(train_loader)}")
         
         max_epochs = self.config.get("epochs", float('inf'))  # Support infinite training
         current_epoch = self.start_epoch
@@ -442,50 +520,62 @@ class GRPOFineTuner:
                 all_rewards = []
                 step_count = 0
                 
-                for i, (sprint_goal, reference) in enumerate(train_data):
-                    try:
-                        loss, outputs, rewards = self.train_step(sprint_goal, reference)
-                        epoch_loss += loss
-                        all_rewards.extend(rewards)
+                # Training loop with DataLoader
+                for batch_idx, batch in enumerate(train_loader):
+                    sprint_goals = batch['sprint_goals']
+                    reference_stories_list = batch['reference_stories']
+                    
+                    # Process each item in the batch
+                    batch_loss = 0.0
+                    batch_rewards = []
+                    
+                    for sprint_goal, reference_stories in zip(sprint_goals, reference_stories_list):
+                        try:
+                            loss, outputs, rewards = self.train_step(sprint_goal, reference_stories)
+                            batch_loss += loss
+                            batch_rewards.extend(rewards)
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing item in batch {batch_idx}: {e}")
+                            continue
+                    
+                    # Average loss over batch items
+                    if len(sprint_goals) > 0:
+                        batch_loss /= len(sprint_goals)
+                        epoch_loss += batch_loss
+                        all_rewards.extend(batch_rewards)
                         step_count += 1
+                    
+                    # Perform optimizer step after accumulation
+                    if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                        self.optimizer_step()
+                    
+                    # Log progress periodically
+                    if (batch_idx + 1) % self.config.get("log_every", 10) == 0:
+                        avg_loss = epoch_loss / step_count if step_count > 0 else 0
+                        avg_reward = np.mean(batch_rewards) if batch_rewards else 0
+                        logger.info(f"Epoch {current_epoch+1}, Batch {batch_idx+1}/{len(train_loader)} - Avg Loss: {avg_loss:.4f}, Batch Reward: {avg_reward:.4f}")
                         
-                        # Perform optimizer step after accumulation
-                        if (i + 1) % self.gradient_accumulation_steps == 0:
-                            self.optimizer_step()
-                        
-                        # Log progress periodically
-                        if (i + 1) % self.config.get("log_every", 10) == 0:
-                            avg_loss = epoch_loss / step_count
-                            avg_reward = np.mean(all_rewards[-len(rewards):])
-                            logger.info(f"Epoch {current_epoch+1}, Step {i+1}/{len(train_data)} - Loss: {avg_loss:.4f}, Reward: {avg_reward:.4f}")
-                            
-                            if self.config.get("use_wandb", False):
-                                wandb.log({
-                                    "step_loss": loss,
-                                    "step_reward": avg_reward,
-                                    "iteration": self.iteration,
-                                    "epoch": current_epoch + 1
-                                })
-                        
-                        # Memory cleanup
-                        if (i + 1) % 50 == 0:
-                            torch.cuda.empty_cache()
-                            gc.collect()
-                            
-                    except KeyboardInterrupt:
-                        logger.info("Training interrupted by user")
-                        self.save_checkpoint(current_epoch, is_final=True)
-                        return
-                    except Exception as e:
-                        logger.error(f"Error at step {i}: {e}")
-                        continue
+                        if self.config.get("use_wandb", False):
+                            wandb.log({
+                                "batch_loss": batch_loss,
+                                "batch_reward": avg_reward,
+                                "iteration": self.iteration,
+                                "epoch": current_epoch + 1,
+                                "batch": batch_idx + 1
+                            })
+                    
+                    # Memory cleanup
+                    if (batch_idx + 1) % 50 == 0:
+                        torch.cuda.empty_cache()
+                        gc.collect()
                 
                 # Epoch summary
-                avg_loss = epoch_loss / len(train_data) if step_count > 0 else 0
+                avg_loss = epoch_loss / len(train_loader) if step_count > 0 else 0
                 avg_reward = np.mean(all_rewards) if all_rewards else 0
                 
                 # Evaluation
-                eval_metrics = self.evaluate(val_data) if val_data else {}
+                eval_metrics = self.evaluate(val_loader) if len(val_loader.dataset) > 0 else {}
                 
                 logger.info(f"Epoch {current_epoch+1} Summary:")
                 logger.info(f"  Average Loss: {avg_loss:.4f}")
@@ -499,7 +589,7 @@ class GRPOFineTuner:
                         "epoch": current_epoch + 1,
                         "train_loss": avg_loss,
                         "train_reward": avg_reward,
-                        "kl_div": np.mean(self.training_metrics["kl_divs"][-len(train_data):]) if self.training_metrics["kl_divs"] else 0,
+                        "kl_div": np.mean(self.training_metrics["kl_divs"][-len(train_loader):]) if self.training_metrics["kl_divs"] else 0,
                     }
                     log_dict.update(eval_metrics)
                     wandb.log(log_dict)
@@ -519,7 +609,7 @@ class GRPOFineTuner:
         logger.info("Training complete.")
 
 def main():
-    parser = argparse.ArgumentParser(description="GRPO fine-tuning with checkpoint support")
+    parser = argparse.ArgumentParser(description="GRPO fine-tuning with DataLoader support")
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--epochs", type=int, default=0,  # 0 means infinite
                         help="Number of epochs (0 for infinite training)")
@@ -532,6 +622,12 @@ def main():
     parser.add_argument("--experiment", default="sprint_goals_rl_tuning")
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--cpu_offload", action="store_true")
+    
+    # DataLoader arguments
+    parser.add_argument("--batch_size", type=int, default=1,
+                        help="Batch size for data loading")
+    parser.add_argument("--num_workers", type=int, default=0,
+                        help="Number of workers for data loading")
     
     # Checkpoint arguments
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
@@ -584,14 +680,9 @@ def main():
             raise FileNotFoundError("Please specify --dataset path or ensure data file exists")
 
     logger.info(f"Loading dataset from: {path}")
-    
-    dataset = SprintGoalDataset(path)
-    data = [(dataset[i][0], dataset[i][1]) for i in range(len(dataset))]
-    
-    logger.info(f"Loaded {len(data)} examples")
 
     trainer = GRPOFineTuner(args.model, config)
-    trainer.train_loop(data)
+    trainer.train_loop(path)
 
     # Final save
     if config.get("save_checkpoints", True):
