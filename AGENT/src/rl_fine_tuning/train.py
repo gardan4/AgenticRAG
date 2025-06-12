@@ -369,13 +369,67 @@ class GRPOFineTuner:
 
             # 9) Gradient accumulation
             scaled_loss = total_loss / self.gradient_accumulation_steps
-            scaled_loss.backward()
-
-            # Store metrics - use the unscaled loss for logging
+            scaled_loss.backward()            # Store metrics - use the unscaled loss for logging
             self.training_metrics["losses"].append(total_loss.item())
             self.training_metrics["rewards"].extend(rewards.tolist())
             self.training_metrics["kl_divs"].append(kl_term.item())
             self.training_metrics["advantages"].extend(advantages.tolist())
+            
+            # Log detailed RL metrics to W&B if enabled
+            if self.config.get("use_wandb", False):
+                # Basic loss components
+                wandb.log({
+                    "step_total_loss": total_loss.item(),
+                    "step_surrogate_loss": loss_surr.item(),
+                    "step_kl_loss": loss_kl.item(),
+                    "step_kl_term": kl_term.item(),
+                    "iteration": self.iteration,
+                }, step=self.iteration)
+                
+                # Reward statistics
+                reward_stats = {
+                    "step_reward_mean": rewards.mean().item(),
+                    "step_reward_std": rewards.std().item(),
+                    "step_reward_min": rewards.min().item(),
+                    "step_reward_max": rewards.max().item(),
+                }
+                wandb.log(reward_stats, step=self.iteration)
+                
+                # Advantage statistics
+                advantage_stats = {
+                    "step_advantage_mean": advantages.mean().item(),
+                    "step_advantage_std": advantages.std().item(),
+                    "step_advantage_min": advantages.min().item(),
+                    "step_advantage_max": advantages.max().item(),
+                }
+                wandb.log(advantage_stats, step=self.iteration)
+                
+                # Policy statistics
+                logp_stats = {
+                    "step_logp_current_mean": logps_curr_seq.mean().item(),
+                    "step_logp_current_std": logps_curr_seq.std().item(),
+                    "step_logp_ref_mean": logps_ref_seq.mean().item(),
+                    "step_logp_ref_std": logps_ref_seq.std().item(),
+                }
+                wandb.log(logp_stats, step=self.iteration)
+                
+                # Ratio statistics (importance sampling)
+                ratio_stats = {
+                    "step_ratio_mean": ratio.mean().item(),
+                    "step_ratio_std": ratio.std().item(),
+                    "step_ratio_min": ratio.min().item(),
+                    "step_ratio_max": ratio.max().item(),
+                }
+                wandb.log(ratio_stats, step=self.iteration)
+                
+                # PPO clipping statistics
+                clipping_stats = {
+                    "step_clipped_ratio_mean": clipped.mean().item(),
+                    "step_clipping_fraction": (ratio != clipped).float().mean().item(),
+                    "step_epsilon": eps,
+                    "step_beta": self.config["beta"],
+                }
+                wandb.log(clipping_stats, step=self.iteration)
 
             return total_loss.item(), texts, rewards.tolist()  # Return unscaled loss
 
@@ -396,17 +450,32 @@ class GRPOFineTuner:
                 param_norm = p.grad.data.norm(2)
                 total_norm += param_norm.item() ** 2
         total_norm = total_norm ** (1. / 2)
+          # Log gradient norm and optimizer statistics
+        if self.config.get("use_wandb", False):
+            wandb.log({
+                "gradient_norm": total_norm,
+                "learning_rate": self.optimizer.param_groups[0]['lr'],
+                "optimizer_step": self.iteration + 1,
+            }, step=self.iteration)
         
-        # Log gradient norm for debugging
         if hasattr(self, 'config') and self.config.get("log_grad_norm", False):
             logger.debug(f"Gradient norm: {total_norm}")
         
         # Gradient clipping
+        clipped_norm = total_norm
         if self.config.get("max_grad_norm", 0) > 0:
-            torch.nn.utils.clip_grad_norm_(
+            clipped_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), 
                 self.config["max_grad_norm"]
             )
+            
+            # Log clipping statistics
+            if self.config.get("use_wandb", False):
+                wandb.log({
+                    "gradient_norm_clipped": clipped_norm,
+                    "gradient_clipped": clipped_norm < total_norm,
+                    "gradient_clip_ratio": clipped_norm / total_norm if total_norm > 0 else 1.0,
+                }, step=self.iteration)
         
         self.optimizer.step()
         self.optimizer.zero_grad()
@@ -549,21 +618,43 @@ class GRPOFineTuner:
                     # Perform optimizer step after accumulation
                     if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
                         self.optimizer_step()
-                    
-                    # Log progress periodically
+                      # Log progress periodically
                     if (batch_idx + 1) % self.config.get("log_every", 10) == 0:
                         avg_loss = epoch_loss / step_count if step_count > 0 else 0
                         avg_reward = np.mean(batch_rewards) if batch_rewards else 0
                         logger.info(f"Epoch {current_epoch+1}, Batch {batch_idx+1}/{len(train_loader)} - Avg Loss: {avg_loss:.4f}, Batch Reward: {avg_reward:.4f}")
                         
                         if self.config.get("use_wandb", False):
-                            wandb.log({
+                            # Basic batch metrics
+                            batch_metrics = {
                                 "batch_loss": batch_loss,
-                                "batch_reward": avg_reward,
+                                "batch_reward_mean": avg_reward,
                                 "iteration": self.iteration,
                                 "epoch": current_epoch + 1,
-                                "batch": batch_idx + 1
-                            })
+                                "batch": batch_idx + 1,
+                                "batch_size": len(sprint_goals),
+                                "progress_pct": ((batch_idx + 1) / len(train_loader)) * 100,
+                            }
+                            
+                            # Add batch reward statistics if available
+                            if batch_rewards:
+                                batch_metrics.update({
+                                    "batch_reward_std": np.std(batch_rewards),
+                                    "batch_reward_min": np.min(batch_rewards),
+                                    "batch_reward_max": np.max(batch_rewards),
+                                })
+                            
+                            # Add recent training metrics averages
+                            recent_window = min(50, len(self.training_metrics["losses"]))
+                            if recent_window > 0:
+                                batch_metrics.update({
+                                    "recent_loss_mean": np.mean(self.training_metrics["losses"][-recent_window:]),
+                                    "recent_reward_mean": np.mean(self.training_metrics["rewards"][-recent_window:]) if self.training_metrics["rewards"] else 0,
+                                    "recent_kl_mean": np.mean(self.training_metrics["kl_divs"][-recent_window:]) if self.training_metrics["kl_divs"] else 0,
+                                    "recent_advantage_mean": np.mean(self.training_metrics["advantages"][-recent_window:]) if self.training_metrics["advantages"] else 0,
+                                })
+                            
+                            wandb.log(batch_metrics)
                     
                     # Memory cleanup
                     if (batch_idx + 1) % 50 == 0:
@@ -582,17 +673,69 @@ class GRPOFineTuner:
                 logger.info(f"  Average Reward: {avg_reward:.4f}")
                 if eval_metrics:
                     logger.info(f"  Eval Reward: {eval_metrics['eval_reward_mean']:.4f} ± {eval_metrics['eval_reward_std']:.4f}")
-                
-                # Log to wandb
+                  # Log comprehensive epoch statistics to wandb
                 if self.config.get("use_wandb", False):
-                    log_dict = {
+                    # Get epoch-specific metrics (last len(train_loader) steps)
+                    epoch_window = min(len(train_loader) * self.config.get("num_samples", 3), len(self.training_metrics["losses"]))
+                    
+                    epoch_log_dict = {
                         "epoch": current_epoch + 1,
                         "train_loss": avg_loss,
-                        "train_reward": avg_reward,
-                        "kl_div": np.mean(self.training_metrics["kl_divs"][-len(train_loader):]) if self.training_metrics["kl_divs"] else 0,
+                        "train_reward_mean": avg_reward,
+                        "samples_processed": len(all_rewards),
+                        "batches_processed": step_count,
                     }
-                    log_dict.update(eval_metrics)
-                    wandb.log(log_dict)
+                    
+                    # Detailed reward statistics
+                    if all_rewards:
+                        epoch_log_dict.update({
+                            "train_reward_std": np.std(all_rewards),
+                            "train_reward_min": np.min(all_rewards),
+                            "train_reward_max": np.max(all_rewards),
+                            "train_reward_q25": np.percentile(all_rewards, 25),
+                            "train_reward_q75": np.percentile(all_rewards, 75),
+                        })
+                    
+                    # KL divergence statistics
+                    if self.training_metrics["kl_divs"] and epoch_window > 0:
+                        epoch_kl = self.training_metrics["kl_divs"][-epoch_window:]
+                        epoch_log_dict.update({
+                            "epoch_kl_mean": np.mean(epoch_kl),
+                            "epoch_kl_std": np.std(epoch_kl),
+                            "epoch_kl_min": np.min(epoch_kl),
+                            "epoch_kl_max": np.max(epoch_kl),
+                        })
+                    
+                    # Advantage statistics
+                    if self.training_metrics["advantages"] and epoch_window > 0:
+                        epoch_advantages = self.training_metrics["advantages"][-epoch_window:]
+                        epoch_log_dict.update({
+                            "epoch_advantage_mean": np.mean(epoch_advantages),
+                            "epoch_advantage_std": np.std(epoch_advantages),
+                            "epoch_advantage_min": np.min(epoch_advantages),
+                            "epoch_advantage_max": np.max(epoch_advantages),
+                        })
+                    
+                    # Loss statistics
+                    if self.training_metrics["losses"] and epoch_window > 0:
+                        epoch_losses = self.training_metrics["losses"][-epoch_window:]
+                        epoch_log_dict.update({
+                            "epoch_loss_std": np.std(epoch_losses),
+                            "epoch_loss_min": np.min(epoch_losses),
+                            "epoch_loss_max": np.max(epoch_losses),
+                        })
+                    
+                    # Training progress and efficiency metrics
+                    epoch_log_dict.update({
+                        "total_iterations": self.iteration,
+                        "current_lr": self.optimizer.param_groups[0]['lr'],
+                        "reference_model_updates": self.iteration // self.update_every,
+                    })
+                    
+                    # Add evaluation metrics
+                    epoch_log_dict.update(eval_metrics)
+                    
+                    wandb.log(epoch_log_dict)
                 
                 # Save checkpoint
                 if self.config.get("save_checkpoints", True):  # Default to True for infinite training
@@ -647,8 +790,13 @@ def main():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top_p", type=float, default=0.9)
-    parser.add_argument("--log_every", type=int, default=10)
+    parser.add_argument("--top_p", type=float, default=0.9)    # Logging arguments
+    parser.add_argument("--log_every", type=int, default=10,
+                        help="Log training progress every N batches")
+    parser.add_argument("--log_grad_norm", action="store_true",
+                        help="Enable gradient norm logging")
+    parser.add_argument("--log_detailed_metrics", action="store_true", default=True,
+                        help="Log detailed RL metrics to W&B")
 
     args = parser.parse_args()
     config = vars(args)
