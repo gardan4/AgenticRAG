@@ -73,10 +73,13 @@ def main():
     parser.add_argument("--dataset", type=str, required=True,
                         help="JSONL file with fields 'sprint_goal' and 'formatted_issues'")
     parser.add_argument("--output_dir", type=str, default="./trl_checkpoints",
-                        help="Where to save checkpoints and logs")
+                        help="Where to save checkpoints and logs"),
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None),
     parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for reproducibility")
-
+                        help="Random seed for reproducibility"),
+    parser.add_argument("--epochs", type=int, default=1,
+                        help="Number of training epochs")
+    
     # ── Dataset & batching ───────────────────────────────────────────────────────
     parser.add_argument("--batch_size", type=int, default=1,
                         help="per_device_train_batch_size")
@@ -130,25 +133,40 @@ def main():
     parser.add_argument("--save_strategy", type=str, default="epoch",
                         choices=["no", "epoch", "steps"],
                         help="When to save checkpoints")
+    parser.add_argument("--log_completions", action="store_true",
+                    help="Log (prompt, completion) samples every logging_steps")
+    parser.add_argument("--num_completions_to_print", type=int, default=None,
+                    help="How many completions to log/print each logging step")
     args = parser.parse_args()
 
     # Reproducibility
     set_seed(args.seed)
 
-    # Load and preprocess dataset
-    raw_ds = load_dataset("json", data_files={"train": args.dataset}, split="train")
+    # ─── Load & split ───────────────────────────────────────────────────────────
+    full_ds = load_dataset("json", data_files={"data": args.dataset}, split="data")
+    split = full_ds.train_test_split(test_size=0.2, seed=args.seed)
+    train_raw = split["train"]
+    val_raw   = split["test"]
+
+    # ─── Preprocess ────────────────────────────────────────────────────────────
     def preprocess(ex):
         return {
             "prompt": PROMPT_TEMPLATE.format(sprint_goal=ex["sprint_goal"]),
             "reference_stories": ex.get("formatted_issues", "")
         }
-    ds = raw_ds.map(preprocess, remove_columns=raw_ds.column_names)
+
+    train_ds = train_raw.map(preprocess, remove_columns=train_raw.column_names)
+    train_ds = train_ds.shuffle(seed=args.seed)
+
+    val_ds   = val_raw.map(preprocess, remove_columns=None)
+    val_ds   = val_ds.shuffle(seed=args.seed)
 
 
     # GRPO configuration :contentReference[oaicite:0]{index=0}
     training_args = GRPOConfig(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
+        num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_iterations=args.num_iterations,
@@ -173,6 +191,8 @@ def main():
 
         logging_steps=args.logging_steps,
         save_strategy=args.save_strategy,
+        log_completions=args.log_completions,
+        num_completions_to_print=args.num_completions_to_print,
     )
 
     # Initialize trainer :contentReference[oaicite:1]{index=1}
@@ -180,11 +200,13 @@ def main():
         model=args.model,
         reward_funcs=grpo_reward_fn,
         args=training_args,
-        train_dataset=ds,
+        train_dataset=train_ds,
+        eval_dataset=val_ds
     )
 
     logger.info("Starting GRPO training…")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+
 
 if __name__ == "__main__":
     main()

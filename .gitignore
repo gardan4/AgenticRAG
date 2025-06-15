@@ -188,4 +188,5 @@ RAG/DataScrape/Abstracts*
 testURL.py
 testDB.py
 RAG/BOT/InputFiles
-
+AGENT/trl_checkpoints
+workspace.code*
