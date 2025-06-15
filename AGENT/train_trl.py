@@ -1,11 +1,10 @@
-import os
 import argparse
 import logging
 import sys
 
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, set_seed
+from transformers import set_seed
 from sentence_transformers import SentenceTransformer
 
 from trl import GRPOConfig, GRPOTrainer
@@ -67,19 +66,70 @@ def grpo_reward_fn(completions, **kwargs):
 # ─── Main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="GRPO fine-tuning with TRL")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct")
+
+    # ── Core I/O & model selection ───────────────────────────────────────────────
+    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B-Instruct",
+                        help="Model ID or path for GRPOTrainer")
     parser.add_argument("--dataset", type=str, required=True,
-                        help="JSONL with fields 'sprint_goal' and 'formatted_issues'")
-    parser.add_argument("--output_dir", type=str, default="./trl_checkpoints")
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=5e-6)
-    parser.add_argument("--seed", type=int, default=42)
+                        help="JSONL file with fields 'sprint_goal' and 'formatted_issues'")
+    parser.add_argument("--output_dir", type=str, default="./trl_checkpoints",
+                        help="Where to save checkpoints and logs")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
+
+    # ── Dataset & batching ───────────────────────────────────────────────────────
+    parser.add_argument("--batch_size", type=int, default=1,
+                        help="per_device_train_batch_size")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--beta", type=float, default=0.0)
-    parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--device", type=str,
-                        default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--num_generations", type=int, default=4,
+                        help="How many completions to sample per prompt")
+    parser.add_argument("--max_prompt_length", type=int, default=512)
+    parser.add_argument("--max_completion_length", type=int, default=100)
+
+    # ── Optimization & RL hyperparameters ────────────────────────────────────────
+    parser.add_argument("--lr", "--learning_rate", type=float, default=1e-6,
+                        dest="learning_rate", help="Initial AdamW learning rate")
+    parser.add_argument("--num_iterations", type=int, default=1,
+                        help="GRPO inner‐loop iterations per batch (μ)")
+    parser.add_argument("--beta", type=float, default=0.04,
+                        help="KL‐penalty coefficient")
+    parser.add_argument("--epsilon", type=float, default=0.2,
+                        help="Lower‐bound clipping ε")
+    parser.add_argument("--delta", type=float, default=None,
+                        help="Upper clipping bound (float > 1+ε) or None")
+    parser.add_argument("--epsilon_high", type=float, default=None,
+                        help="Explicit upper‐bound ε (defaults to epsilon if None)")
+    parser.add_argument("--reward_weights", type=float, nargs="+", default=None,
+                        help="Per‐reward weights (e.g. --reward_weights 1.0 0.5)")
+    parser.add_argument("--scale_rewards", action="store_true",
+                        help="Normalize rewards by their standard deviation")
+    parser.add_argument("--loss_type", type=str, default="bnpo",
+                        choices=["grpo", "bnpo", "dr_grpo"],
+                        help="Which GRPO loss formulation to use")
+    parser.add_argument("--mask_truncated_completions", action="store_true",
+                        help="Exclude truncated completions from loss")
+
+    # ── Reference‐model sync (TR‐DPO) ────────────────────────────────────────────
+    parser.add_argument("--sync_ref_model", action="store_true",
+                        help="Whether to sync the reference model each ref_model_sync_steps")
+    parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.6,
+                        help="Mix coefficient α for reference‐model updates")
+    parser.add_argument("--ref_model_sync_steps", type=int, default=512,
+                        help="How often to sync reference model (τ steps)")
+
+    # ── Liger & vLLM settings ─────────────────────────────────────────────────────
+    parser.add_argument("--use_liger_loss", action="store_true",
+                        help="Use the Liger variant of GRPO loss")
+    parser.add_argument("--use_vllm", action="store_true",
+                        help="Generate with vLLM instead of model.generate()")
+    parser.add_argument("--bf16", action="store_true",
+                        help="Use bfloat16 mixed precision")
+
+    # ── Logging & checkpointing ──────────────────────────────────────────────────
+    parser.add_argument("--logging_steps", type=int, default=10)
+    parser.add_argument("--save_strategy", type=str, default="epoch",
+                        choices=["no", "epoch", "steps"],
+                        help="When to save checkpoints")
     args = parser.parse_args()
 
     # Reproducibility
@@ -94,29 +144,35 @@ def main():
         }
     ds = raw_ds.map(preprocess, remove_columns=raw_ds.column_names)
 
-    # Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, trust_remote_code=True
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     # GRPO configuration :contentReference[oaicite:0]{index=0}
     training_args = GRPOConfig(
         output_dir=args.output_dir,
-        learning_rate=args.lr,
+        learning_rate=args.learning_rate,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        num_iterations=1,
+        num_iterations=args.num_iterations,
         beta=args.beta,
         epsilon=args.epsilon,
-        num_generations=4,
-        max_prompt_length=512,
-        max_completion_length=100,
-        logging_steps=10,
-        save_strategy="epoch",
-        use_vllm=False,              # or True if you’ve set up vLLM
-        bf16=False,                  # or True if you want bfloat16
+        delta=args.delta,
+        epsilon_high=args.epsilon_high,
+        reward_weights=args.reward_weights,
+        scale_rewards=args.scale_rewards,
+        loss_type=args.loss_type,
+        mask_truncated_completions=args.mask_truncated_completions,
+        sync_ref_model=args.sync_ref_model,
+        ref_model_mixup_alpha=args.ref_model_mixup_alpha,
+        ref_model_sync_steps=args.ref_model_sync_steps,
+        use_liger_loss=args.use_liger_loss,
+
+        num_generations=args.num_generations,
+        max_prompt_length=args.max_prompt_length,
+        max_completion_length=args.max_completion_length,
+        use_vllm=args.use_vllm,
+        bf16=args.bf16,
+
+        logging_steps=args.logging_steps,
+        save_strategy=args.save_strategy,
     )
 
     # Initialize trainer :contentReference[oaicite:1]{index=1}
@@ -125,7 +181,6 @@ def main():
         reward_funcs=grpo_reward_fn,
         args=training_args,
         train_dataset=ds,
-        processing_class=tokenizer,    # ← use this instead
     )
 
     logger.info("Starting GRPO training…")
