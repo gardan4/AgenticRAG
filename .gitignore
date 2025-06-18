@@ -183,6 +183,7 @@ AgenticRAG/checkpoints
 
 RAG/Database/Input/*
 RAG/Database/Output/*
+RAG/Database/OutputFictional/*
 RAG/DataScrape/Input*
 RAG/DataScrape/Abstracts*
 testURL.py
@@ -190,3 +191,6 @@ testDB.py
 RAG/BOT/InputFiles
 AGENT/trl_checkpoints
 workspace.code*
+
+# Gradio
+certificate.pem
