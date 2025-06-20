@@ -121,10 +121,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1,
                         help="per_device_train_batch_size")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--num_generations", type=int, default=4,
+    parser.add_argument("--num_generations", type=int, default=3,
                         help="How many completions to sample per prompt")
     parser.add_argument("--max_prompt_length", type=int, default=512)
-    parser.add_argument("--max_completion_length", type=int, default=512,
+    parser.add_argument("--max_completion_length", type=int, default=1024,
                         help="Increased for thinking + final output")
 
     # ── DeepSeek-R1 Generation Parameters ────────────────────────────────────────
@@ -166,13 +166,15 @@ def main():
     parser.add_argument("--ref_model_sync_steps", type=int, default=512,
                         help="How often to sync reference model (τ steps)")
 
-    # ── Liger & vLLM settings ─────────────────────────────────────────────────────
+    # ── Memory & optimization settings ────────────────────────────────────────────
     parser.add_argument("--use_liger_loss", action="store_true",
                         help="Use the Liger variant of GRPO loss")
     parser.add_argument("--use_vllm", action="store_true",
                         help="Generate with vLLM instead of model.generate()")
     parser.add_argument("--bf16", action="store_true",
                         help="Use bfloat16 mixed precision")
+    parser.add_argument("--gradient_checkpointing", action="store_true",
+                        help="Enable gradient checkpointing to save memory")
 
     # ── Logging & checkpointing ──────────────────────────────────────────────────
     parser.add_argument("--logging_steps", type=int, default=10)
@@ -191,6 +193,9 @@ def main():
 
     logger.info(f"Training DeepSeek-R1-Distill-Qwen-1.5B with GRPO")
     logger.info(f"Temperature: {args.temperature}, Max completion length: {args.max_completion_length}")
+    logger.info(f"Batch size: {args.batch_size}, Gradient accumulation: {args.gradient_accumulation_steps}")
+    logger.info(f"Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
+    logger.info(f"Generations per prompt: {args.num_generations}")
 
     # ─── Load & split ───────────────────────────────────────────────────────────
     full_ds = load_dataset("json", data_files={"data": args.dataset}, split="data")
@@ -210,6 +215,8 @@ def main():
 
     val_ds = val_raw.map(preprocess, remove_columns=None)
     val_ds = val_ds.shuffle(seed=args.seed)
+
+    logger.info(f"Training samples: {len(train_ds)}, Validation samples: {len(val_ds)}")
 
     # GRPO configuration
     training_args = GRPOConfig(
@@ -243,6 +250,9 @@ def main():
         do_sample=args.do_sample,
         top_p=args.top_p,
 
+        # Memory optimization
+        gradient_checkpointing=args.gradient_checkpointing,
+
         logging_steps=args.logging_steps,
         save_strategy=args.save_strategy,
         log_completions=args.log_completions,
@@ -260,6 +270,9 @@ def main():
 
     logger.info("Starting GRPO training with DeepSeek-R1-Distill-Qwen-1.5B...")
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+
+    logger.info("Training completed!")
+    logger.info(f"Model saved to: {args.output_dir}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
-accelerate launch train_trl.py \
+accelerate launch train_trl_cot.py \
     --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     --dataset ./data/sprint_goals_training_data-qwen-3B.jsonl \
-    --output_dir ./trl_checkpoints_deepseek_safe \
+    --output_dir ./trl_checkpoints_exploratory \
     --epochs 10 \
     --lr 1e-6 \
     --temperature 0.6 \
@@ -10,10 +10,11 @@ accelerate launch train_trl.py \
     --beta 0.1 \
     --epsilon 0.15 \
     --save_strategy epoch \
-    --batch_size 3 \
-    --gradient_accumulation_steps 21 \
+    --batch_size 6 \
+    --gradient_accumulation_steps 11 \
     --gradient_checkpointing \
     --bf16 \
     --logging_steps 5 \
     --log_completions \
-    --num_completions_to_print 4
+    --num_completions_to_print 4 \
+    --num_generations 3
