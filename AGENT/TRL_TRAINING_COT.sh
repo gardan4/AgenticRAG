@@ -7,8 +7,8 @@ accelerate launch train_trl_cot.py \
     --temperature 0.6 \
     --top_p 0.95 \
     --max_completion_length 1024 \
-    --beta 0.1 \
-    --epsilon 0.15 \
+    --beta 0.75 \
+    --epsilon 0.1 \
     --save_strategy epoch \
     --batch_size 6 \
     --gradient_accumulation_steps 11 \

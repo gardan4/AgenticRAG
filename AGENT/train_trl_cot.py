@@ -252,6 +252,8 @@ def main():
     cfg = GRPOConfig(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
+        lr_scheduler_type="constant_with_warmup",
+        warmup_ratio=0.05,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
