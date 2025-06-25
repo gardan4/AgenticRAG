@@ -280,12 +280,11 @@ def main():
         save_strategy=args.save_strategy,
         log_completions=args.log_completions,
         num_completions_to_print=args.num_completions_to_print,
-        generate_kwargs=dict(
+        generation_kwargs=dict(
             do_sample=args.do_sample,
             temperature=args.temperature,
             top_p=args.top_p,
             max_new_tokens=args.max_completion_length,
-            prefix_allowed_tokens_fn=prefix_allowed_tokens,
             pad_token_id=tokenizer.eos_token_id,
         ),
     )
@@ -297,7 +296,15 @@ def main():
         args=cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tokenizer,
+    )
+
+    trainer.generate_kwargs = dict(
+        do_sample=args.do_sample,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_new_tokens=args.max_completion_length,
+        pad_token_id=tokenizer.eos_token_id,
+        prefix_allowed_tokens_fn=prefix_allowed_tokens,   # ← forces <think>\n
     )
 
     logger.info("Starting training …")
