@@ -2,7 +2,7 @@
 
 from src.baseline_agent.base_agent import BaseAgent
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from src.reward.reward_function import compute_reward
+from _old.reward.reward_function import compute_reward
 
 def evaluate_model(model_name, dataset):
     tokenizer = AutoTokenizer.from_pretrained(model_name)

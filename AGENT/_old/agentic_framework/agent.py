@@ -3,8 +3,8 @@
 import re
 import torch
 
-from src.agentic_framework.tools import CalculatorTool, SearchTool
-from src.utils.model_loader import load_model
+from _old.agentic_framework.tools import CalculatorTool, SearchTool
+from _old.utils.model_loader import load_model
 
 
 class AgenticModel:

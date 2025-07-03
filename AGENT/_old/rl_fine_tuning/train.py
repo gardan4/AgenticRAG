@@ -20,8 +20,8 @@ agent_dir = os.path.dirname(os.path.dirname(current_dir))
 if agent_dir not in sys.path:
     sys.path.insert(0, agent_dir)
 
-from src.reward.reward_function import compute_reward
-from src.utils.logging_utils import get_logger
+from _old.reward.reward_function import compute_reward
+from _old.utils.logging_utils import get_logger
 
 def logprobs_from_logits(
     logits: torch.Tensor,

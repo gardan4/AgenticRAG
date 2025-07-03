@@ -1,20 +1,11 @@
 #!/usr/bin/env python
 # train_trl_cot.py
-import argparse
-import logging
-import sys
-import re
-import math
-import itertools
-import csv
-
-import torch
-import torch.nn.functional as F
+import argparse, logging, sys
+import torch, torch.nn.functional as F
 from datasets import load_dataset
 from transformers import set_seed, AutoTokenizer
-from sentence_transformers import SentenceTransformer
-
 from trl import GRPOConfig, GRPOTrainer
+from reward_components import reward_fns, reward_weights
 
 # ─── Logger ─────────────────────────────────────────────────────────────────────
 def get_logger(name, level=logging.INFO):
@@ -29,150 +20,32 @@ def get_logger(name, level=logging.INFO):
 logger = get_logger(__name__)
 
 # ─── Prompt (no <think> tag inside) ─────────────────────────────────────────────
-PROMPT_TEMPLATE = (
-    "You are an experienced Scrum Master. Your task is to generate clear, well-"
-    "structured user stories based on sprint goals. Follow the standard user story "
-    "format: 'As a [user role], I want [action], so that [benefit]'. Make sure stories "
-    "are aligned with the sprint goal, specific, measurable, and achievable.\n\n"
-    "Sprint Goal: {sprint_goal}\n\n"
-    "First write your private reasoning inside <think>...</think>, then output the "
-    "user stories in that exact pattern, one per line.\n\n"
-)
+PROMPT_TEMPLATE = ("""
+                    <task>
+                    Generate well-formed user stories from the sprint goal.
+                    </task>
+                   
+                    <role>
+                    You are an experienced Scrum Master.
+                    </role>
 
-# ─── Reward-model cache ─────────────────────────────────────────────────────────
-_model_cache = {}
-def get_model(name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-    if name not in _model_cache:
-        _model_cache[name] = SentenceTransformer(name)
-        logger.info(f"Loaded reward model: {name}")
-    return _model_cache[name]
+                    <format>
+                    Each story must be one line and follow:
+                    As a [role], I want [action], so that [benefit]
+                    </format>
 
-# ─── Helpers ────────────────────────────────────────────────────────────────────
-RE_STORY = re.compile(r'^(?:[-–*•]\s*)?As a .+?, I want .+?, so that .+?\.?$', re.I)
+                    <constraints>
+                    • Use exactly one line per story  
+                    • No headings, markdown, or bullet characters  
+                    • Do not add extra commentary outside the stories  
+                    </constraints>
 
-def extract_final_output(text: str) -> str:
-    """Strip everything up to and incl. </think>."""
-    m = re.search(r'</think>\s*', text, flags=re.I)
-    return text[m.end():].strip() if m else text.strip()
+                    <sprint_goal>
+                    {sprint_goal}
+                    </sprint_goal>
 
-BULLET_RE = re.compile(r'^(?:[-*•–]|[0-9]+[.)])\s*')
-
-def split_issues(ref_block: str):
-    issues = []
-    for raw in ref_block.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        line = BULLET_RE.sub('', line)
-
-        title = None
-        try:
-            cell = next(csv.reader([line], quotechar='"', escapechar='\\', doublequote=True))
-            title = cell[0].strip()
-        except Exception:
-            m = re.match(r'^(?:"?)(.*?)(?<!\\)"?\s*(?:[,;].*)?$', line)
-            if m:
-                title = m.group(1).replace('""', '"').replace('\\"', '"').strip()
-        if title:
-            issues.append(title)
-    return issues
-
-def story_lines(clean_out: str):
-    """Return list of non-blank lines after </think>."""
-    return [ln.strip() for ln in clean_out.splitlines() if ln.strip()]
-
-def cosine(a, b):
-    return float(F.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item())
-
-# ─── Multi-component reward ─────────────────────────────────────────────────────
-def compute_multi_reward(gen_text: str, ref_block: str,
-                         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-                         dup_thresh: float = 0.8, τ: float = 2.0):
-    """
-    Returns a single scalar reward composed of eight sub-scores:
-    regex_struct, clause_pres, coverage, story_count, length_bonus
-    minus redundancy_penalty and extraneous_penalty.
-    """
-    final = extract_final_output(gen_text)
-    lines = story_lines(final)
-    total_lines = len(lines)
-
-    # Early out if nothing generated
-    if total_lines == 0:
-        return 0.0
-
-    # 1 Regex-structure
-    matches = [ln for ln in lines if RE_STORY.match(ln)]
-    regex_struct = len(matches) / total_lines
-
-    # 2 Clause-presence
-    clausified = []
-    for ln in lines:
-        s = 0
-        l = ln.lower()
-        if "as a" in l:     s += 1/3
-        if "i want" in l:   s += 1/3
-        if "so that" in l:  s += 1/3
-        clausified.append(s)
-    clause_presence = sum(clausified) / total_lines
-
-    # 3 Coverage (issue-recall)
-    issues = split_issues(ref_block)
-    coverage = 0.0
-    if issues and matches:
-        model = get_model(model_name)
-        iss_emb = model.encode(issues, convert_to_tensor=True)
-        sto_emb = model.encode(matches, convert_to_tensor=True)
-        sims = []
-        for ie in iss_emb:
-            best = torch.max(F.cosine_similarity(ie.unsqueeze(0), sto_emb)).item()
-            sims.append(best)
-        coverage = sum(sims) / len(sims)
-
-    # 4 Redundancy penalty
-    redundancy = 0.0
-    if len(matches) > 1:
-        model = get_model(model_name)
-        m_emb = model.encode(matches, convert_to_tensor=True)
-        dup = 0
-        for i, j in itertools.combinations(range(len(matches)), 2):
-            if cosine(m_emb[i], m_emb[j]) > dup_thresh:
-                dup += 1
-        redundancy = dup / len(matches)
-
-    # 5 Story-count match
-    story_cnt_reward = math.exp(-abs(len(matches) - len(issues)) / τ) if issues else 0.0
-
-    # 6 Extraneous-text penalty
-    extraneous_lines = total_lines - len(matches)
-    extraneous_penalty = extraneous_lines / total_lines
-
-    # 7 Length-adequacy bonus
-    bonuses = []
-    for ln in matches:
-        n = len(ln.split())
-        if   n <= 12: bonuses.append(0.0)
-        elif n >= 45: bonuses.append(1.0)
-        else:         bonuses.append((n - 12) / 33)
-    length_bonus = sum(bonuses) / len(bonuses) if bonuses else 0.0
-
-    # Aggregate: average positives then subtract penalties
-    pos = (regex_struct + clause_presence + coverage +
-           story_cnt_reward + length_bonus) / 5.0
-    neg = (redundancy + extraneous_penalty)
-    return pos - neg
-
-def grpo_reward_fn(completions, **kwargs):
-    refs = kwargs.get("reference_stories", [""] * len(completions))
-    rewards = []
-    for comp, ref in zip(completions, refs):
-        try:
-            r = compute_multi_reward(comp, ref)
-            rewards.append(r)
-        except Exception as e:
-            logger.error(f"Reward error: {e}")
-            rewards.append(0.0)
-    return rewards
+                    <think>
+                """)
 
 # ─── Main training script ───────────────────────────────────────────────────────
 def main():
@@ -262,7 +135,6 @@ def main():
         epsilon=args.epsilon,
         delta=args.delta,
         epsilon_high=args.epsilon_high,
-        reward_weights=args.reward_weights,
         scale_rewards=args.scale_rewards,
         loss_type=args.loss_type,
         mask_truncated_completions=args.mask_truncated_completions,
@@ -280,36 +152,26 @@ def main():
         save_strategy=args.save_strategy,
         log_completions=args.log_completions,
         num_completions_to_print=args.num_completions_to_print,
+        reward_weights=reward_weights,
         generation_kwargs=dict(
-            do_sample=args.do_sample,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            max_new_tokens=args.max_completion_length,
-            pad_token_id=tokenizer.eos_token_id,
-        ),
+            do_sample=True, temperature=args.temperature, top_p=args.top_p,
+            max_new_tokens=args.max_completion_length, pad_token_id=tokenizer.eos_token_id)
     )
 
-    # ─── Trainer ───────────────────────────────────────────────────────────────
-    trainer = GRPOTrainer(
+    trainer=GRPOTrainer(
         model=args.model,
-        reward_funcs=grpo_reward_fn,
+        reward_funcs=reward_fns,
         args=cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
     )
 
-    trainer.generate_kwargs = dict(
-        do_sample=args.do_sample,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_new_tokens=args.max_completion_length,
-        pad_token_id=tokenizer.eos_token_id,
-        prefix_allowed_tokens_fn=prefix_allowed_tokens,   # ← forces <think>\n
-    )
+    # # enforce <think>\n prefix
+    # trainer.generate_kwargs = dict(
+    #     prefix_allowed_tokens_fn=prefix_allowed_tokens,   # ← forces <think>\n
+    # )
 
-    logger.info("Starting training …")
-    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
-    logger.info(f"Finished!  Checkpoints in {args.output_dir}")
+    logger.info("Start training"); trainer.train(); logger.info("Done!")
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
