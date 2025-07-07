@@ -1,0 +1,20 @@
+compute_environment: LOCAL_MACHINE
+deepspeed_config: {}
+distributed_type: MULTI_GPU
+downcast_bf16: 'no'
+fp16: False
+gpu_ids: 0,1           # GPUs assigned to the *training* processes
+machine_rank: 0
+main_process_ip: null
+main_process_port: null
+master_address: null
+master_port: -1
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2       # -- two DDP workers (one per policy shard)
+rdzv_backend: static
+same_network: True
+tpu_env: {}
+tpu_name: null
+tpu_zone: null
+use_cpu: False

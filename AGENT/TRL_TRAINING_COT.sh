@@ -1,4 +1,4 @@
-accelerate launch train_trl_cot.py \
+accelerate launch --config_file ./my_accel.yaml train_trl_cot.py \
     --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
     --dataset ./data/sprint_goals_training_data-qwen-3B.jsonl \
     --output_dir ./trl_checkpoints_lora_14B \
@@ -17,8 +17,11 @@ accelerate launch train_trl_cot.py \
     --gradient_checkpointing \
     --num_completions_to_print 4 \
     --num_generations 3 \
-    --load_4bit \
+    --bf16 \
     --num_iterations 4 \
     --lora_dropout 0.05 \
     --lora_r 16 \
     --lora_alpha 32 \
+    --use_vllm \
+    --vllm_endpoint http://localhost:8000   \
+    --vllm_tensor_parallel_size 2          \

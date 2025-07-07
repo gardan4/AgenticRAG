@@ -11,3 +11,15 @@ pip install \
     trl[vllm] \
     BitsAndBytesConfig \
     torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+
+# Example: your accelerate config will use GPUs 0-1 for training,
+# so we put vLLM on GPUs 2-3
+CUDA_VISIBLE_DEVICES=2,3 \
+python -m vllm.entrypoints.openai.api_server \
+    --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
+    --quantization nf4 \
+    --tensor-parallel-size 2 \
+    --dtype bfloat16
+
+
