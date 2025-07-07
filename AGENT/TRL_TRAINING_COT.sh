@@ -3,18 +3,19 @@ accelerate launch train_trl_cot.py \
     --dataset ./data/sprint_goals_training_data-qwen-3B.jsonl \
     --output_dir ./trl_checkpoints_exploratory \
     --epochs 10 \
-    --lr 1e-6 \
+    --lr 3e-6 \
     --temperature 0.6 \
     --top_p 0.95 \
     --max_completion_length 1024 \
-    --beta 0.75 \
-    --epsilon 0.1 \
+    --beta 0.05 \
+    --epsilon 0.3 \
     --save_strategy epoch \
-    --batch_size 6 \
-    --gradient_accumulation_steps 11 \
+    --batch_size 5 \
+    --gradient_accumulation_steps 9 \
     --gradient_checkpointing \
     --bf16 \
     --logging_steps 5 \
     --log_completions \
     --num_completions_to_print 4 \
-    --num_generations 3
+    --num_generations 3 \
+    --num_iterations 4

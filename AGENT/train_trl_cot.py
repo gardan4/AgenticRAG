@@ -22,16 +22,18 @@ logger = get_logger(__name__)
 # ─── Prompt (no <think> tag inside) ─────────────────────────────────────────────
 PROMPT_TEMPLATE = ("""
                     <task>
-                    Generate well-formed user stories from the sprint goal.
+                    Generate well-formed user stories from the given sprint goal.
                     </task>
                    
                     <role>
-                    You are an experienced Scrum Master.
+                    You are an experienced Scrum Master creating the user stories for this sprint.
                     </role>
 
                     <format>
                     Each story must be one line and follow:
                     As a [role], I want [action], so that [benefit]
+                    Where you need to fill in the [role], [action], and [benefit] parts with
+                    appropriate content based on the sprint goal.
                     </format>
 
                     <constraints>

@@ -28,10 +28,24 @@ def get_model(name: str = "sentence-transformers/all-MiniLM-L6-v2") -> SentenceT
     return _model_cache[name]
 
 # ─── regexes & helpers ────────────────────────────────────────────────
+# Require literal “as a ” (or “as an ”) — nothing looser
 RE_STORY = re.compile(
-    r'as a .+? i want .+? so that .+?',   # “so that …” optional
-    re.I,
+    r"""
+    ^\s*
+    (?:                # optional leading bullet / number / markdown
+        (?:\*\*?|[-•*–]|\d+[.)])\s*
+    )*
+    as\ (?:a|an)\s+     # ← must be “as a ” or “as an ”
+    [^,]+?              # role text up to comma or ‘i want’
+    (?:,)?\s*           # optional comma
+    i\ want\s+.+?       # action
+    \s*,?\s*            # optional comma
+    so\ that\s+.+?      # benefit
+    \.?$                # optional trailing period
+    """,
+    re.I | re.X,
 )
+
 
 def _story_fraction(line: str) -> float:
     line = line.lower()
@@ -86,7 +100,6 @@ def _lines_batch(completions):
 
 # 1 regex structure
 def r_regex(completions, **kwargs):
-    print(_lines_batch(completions))
     return [len([l for l in ls if RE_STORY.match(l)])/len(ls) if ls else 0.0 for ls in _lines_batch(completions)]
 
 # 2 clause presence
@@ -222,7 +235,7 @@ def p_extraneous(completions, **kwargs):
 
 # ordered list & weights
 reward_fns   = [r_regex, r_clause, r_coverage, r_count, r_length, p_redundancy, p_extraneous]
-reward_weights= [0.35,    0.25,    0.10,      0.05,  0.25,   0.20,        0.10]
+reward_weights= [0.15,    0.20,    0.30,      0.1,  0.1,   0.20,        0.15]
 
 # ─── utilities ---------------------------------------------------------------
 
