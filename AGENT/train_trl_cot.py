@@ -3,9 +3,12 @@
 import argparse, logging, sys
 import torch, torch.nn.functional as F
 from datasets import load_dataset
-from transformers import set_seed, AutoTokenizer
+
+from transformers import set_seed, AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from trl import GRPOConfig, GRPOTrainer
 from reward_components import reward_fns, reward_weights
+from peft import LoraConfig, get_peft_model
+
 
 # ─── Logger ─────────────────────────────────────────────────────────────────────
 def get_logger(name, level=logging.INFO):
@@ -95,6 +98,14 @@ def main():
                         choices=["no", "epoch", "steps"])
     parser.add_argument("--log_completions", action="store_true")
     parser.add_argument("--num_completions_to_print", type=int, default=None)
+
+    # LoRA-specific
+    parser.add_argument("--lora_r", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
+
+    parser.add_argument("--load_4bit", action="store_true",
+                    help="Quantise base model to 4-bit NF4")
     args = parser.parse_args()
 
     # ─── seed & tokenizer / prefix enforcement ─────────────────────────────────
@@ -123,8 +134,47 @@ def main():
 
     logger.info(f"Training samples: {len(train_ds)} | Validation: {len(val_ds)}")
 
+
+
+    if args.load_4bit:
+        from transformers import BitsAndBytesConfig
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16 if args.bf16 else torch.float16,
+            bnb_4bit_quant_type="nf4",
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            device_map="auto",
+            quantization_config=bnb_cfg,
+            trust_remote_code=True,
+        )
+    else:
+        dtype = torch.bfloat16 if args.bf16 else torch.float16
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+    # ── ② Attach LoRA adapters (PEFT) ────────────────────────────────
+    lora_cfg = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        task_type="CAUSAL_LM",
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj", "wi", "wo"
+        ],
+    )
+    model = get_peft_model(base_model, lora_cfg)
+    model.print_trainable_parameters()
+
     # ─── GRPO config ───────────────────────────────────────────────────────────
     cfg = GRPOConfig(
+        vllm_mode="server",
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant_with_warmup",
@@ -161,12 +211,21 @@ def main():
     )
 
     trainer=GRPOTrainer(
-        model=args.model,
+        model=model,
         reward_funcs=reward_fns,
         args=cfg,
         train_dataset=train_ds,
         eval_dataset=val_ds,
     )
+
+    logger.info("🏋️  Start training")
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    logger.info("✅  Finished")
+
+    # Save only LoRA adapters + tokenizer
+    model.save_pretrained(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
+
 
     # # enforce <think>\n prefix
     # trainer.generate_kwargs = dict(
@@ -176,4 +235,14 @@ def main():
     logger.info("Start training"); trainer.train(); logger.info("Done!")
 
 if __name__=="__main__":
+    import logging
+
+    class _SilenceCacheVsCKPT(logging.Filter):
+        """Blocks the single warning about caching vs. checkpointing."""
+        _needle = "Caching is incompatible with gradient checkpointing"
+        def filter(self, record: logging.LogRecord) -> bool:
+            return self._needle not in record.getMessage()
+
+    # Attach the filter once to the root HF logger
+    logging.getLogger("transformers").addFilter(_SilenceCacheVsCKPT())
     main()

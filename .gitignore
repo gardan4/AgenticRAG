@@ -194,3 +194,4 @@ workspace.code*
 
 # Gradio
 certificate.pem
+trl_checkpoints_exploratory/
