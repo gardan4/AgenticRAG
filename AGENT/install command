@@ -14,11 +14,11 @@ pip install \
 
 
 
-CUDA_VISIBLE_DEVICES=2,3,4 \
+CUDA_VISIBLE_DEVICES=3,4 \
 python -m vllm.entrypoints.openai.api_server \
         --model  deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
         --quantization nf4            \
-        --tensor-parallel-size 3      \
+        --tensor-parallel-size 2      \
         --dtype bfloat16
 
 

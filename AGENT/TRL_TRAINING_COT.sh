@@ -24,4 +24,4 @@ accelerate launch --config_file ./my_accel.yaml train_trl_cot.py \
     --lora_alpha 32 \
     --use_vllm \
     --vllm_endpoint http://localhost:8000   \
-    --vllm_tensor_parallel_size 3          \
+    --vllm_tensor_parallel_size 2          \
