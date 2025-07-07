@@ -1,0 +1,9 @@
+pip install \
+    accelerate \
+    transformers \
+    trl \
+    sentence-transformers \
+    datasets \
+    scikit-learn \
+    pandas \
+    tqdm
