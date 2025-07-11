@@ -10,6 +10,7 @@ from reward_components import reward_fns, reward_weights
 from peft import LoraConfig, get_peft_model
 
 
+
 # ─── Logger ─────────────────────────────────────────────────────────────────────
 def get_logger(name, level=logging.INFO):
     logger = logging.getLogger(name)
@@ -90,7 +91,6 @@ def main():
     parser.add_argument("--ref_model_mixup_alpha", type=float, default=0.6)
     parser.add_argument("--ref_model_sync_steps", type=int, default=512)
     parser.add_argument("--use_liger_loss", action="store_true")
-    parser.add_argument("--use_vllm", action="store_true")
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--logging_steps", type=int, default=10)
@@ -106,6 +106,14 @@ def main():
 
     parser.add_argument("--load_4bit", action="store_true",
                     help="Quantise base model to 4-bit NF4")
+
+    # vLLM --------------------------------------------------------------
+    parser.add_argument("--use_vllm", action="store_true",
+                   help="Send generation to a running vLLM server")
+    parser.add_argument("--vllm_endpoint", default="http://127.0.0.1:8000",
+                   help="Base URL of the vLLM server when --use_vllm")
+    parser.add_argument("--vllm_tensor_parallel_size", type=int, default=1),
+
     args = parser.parse_args()
 
     # ─── seed & tokenizer / prefix enforcement ─────────────────────────────────
@@ -133,8 +141,7 @@ def main():
     val_ds   = val_raw  .map(preprocess, remove_columns=None)                 .shuffle(seed=args.seed)
 
     logger.info(f"Training samples: {len(train_ds)} | Validation: {len(val_ds)}")
-
-
+                    # A100-40 GB example
 
     if args.load_4bit:
         from transformers import BitsAndBytesConfig
@@ -173,8 +180,8 @@ def main():
     model.print_trainable_parameters()
 
     # ─── GRPO config ───────────────────────────────────────────────────────────
+
     cfg = GRPOConfig(
-        vllm_mode="server",
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant_with_warmup",
@@ -198,6 +205,7 @@ def main():
         max_prompt_length=args.max_prompt_length,
         max_completion_length=args.max_completion_length,
         use_vllm=args.use_vllm,
+        vllm_tensor_parallel_size=args.vllm_tensor_parallel_size,  # vLLM uses this as TP size
         bf16=args.bf16,
         gradient_checkpointing=args.gradient_checkpointing,
         logging_steps=args.logging_steps,
@@ -206,8 +214,9 @@ def main():
         num_completions_to_print=args.num_completions_to_print,
         reward_weights=reward_weights,
         generation_kwargs=dict(
-            do_sample=True, temperature=args.temperature, top_p=args.top_p,
-            max_new_tokens=args.max_completion_length, pad_token_id=tokenizer.eos_token_id)
+            temperature=args.temperature, top_p=args.top_p,
+            max_tokens=args.max_completion_length
+        ),
     )
 
     trainer=GRPOTrainer(
@@ -217,6 +226,7 @@ def main():
         train_dataset=train_ds,
         eval_dataset=val_ds,
     )
+
 
     logger.info("🏋️  Start training")
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
@@ -235,14 +245,4 @@ def main():
     logger.info("Start training"); trainer.train(); logger.info("Done!")
 
 if __name__=="__main__":
-    import logging
-
-    class _SilenceCacheVsCKPT(logging.Filter):
-        """Blocks the single warning about caching vs. checkpointing."""
-        _needle = "Caching is incompatible with gradient checkpointing"
-        def filter(self, record: logging.LogRecord) -> bool:
-            return self._needle not in record.getMessage()
-
-    # Attach the filter once to the root HF logger
-    logging.getLogger("transformers").addFilter(_SilenceCacheVsCKPT())
     main()

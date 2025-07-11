@@ -1,7 +1,8 @@
-accelerate launch --config_file ./my_accel.yaml train_trl_cot.py \
-    --model deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
+CUDA_VISIBLE_DEVICES=2,3 accelerate launch --config_file my_accel.yaml \
+    train_trl_cot.py \
+    --model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
     --dataset ./data/sprint_goals_training_data-qwen-3B.jsonl \
-    --output_dir ./trl_checkpoints_lora_14B \
+    --output_dir ./trl_checkpoints_lora_7B \
     --epochs 10 \
     --lr 3e-6 \
     --temperature 0.6 \
@@ -10,18 +11,16 @@ accelerate launch --config_file ./my_accel.yaml train_trl_cot.py \
     --beta 0.1 \
     --epsilon 0.25 \
     --save_strategy epoch \
-    --batch_size 6 \
-    --gradient_accumulation_steps 16 \
+    --batch_size 2 \
+    --gradient_accumulation_steps 12 \
     --logging_steps 5 \
     --log_completions \
-    --gradient_checkpointing \
-    --num_completions_to_print 4 \
-    --num_generations 3 \
-    --bf16 \
+    --num_completions_to_print 1 \
+    --num_generations 6 \
+    --bf16  \
     --num_iterations 4 \
     --lora_dropout 0.05 \
     --lora_r 16 \
     --lora_alpha 32 \
     --use_vllm \
-    --vllm_endpoint http://localhost:8000   \
-    --vllm_tensor_parallel_size 2          \
+    --vllm_tensor_parallel_size 1
